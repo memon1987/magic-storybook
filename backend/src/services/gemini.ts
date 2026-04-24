@@ -58,10 +58,29 @@ export async function generateStory(input: StoryInput): Promise<GeneratedStory> 
   console.log('Generating story with Gemini Pro...');
   const startTime = Date.now();
 
-  const response = await ai.models.generateContent({
-    model: TEXT_MODEL,
-    contents: prompt,
-  });
+  let response: Awaited<ReturnType<typeof ai.models.generateContent>> | null = null;
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      response = await ai.models.generateContent({
+        model: TEXT_MODEL,
+        contents: prompt,
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+      if (isRetryableError(error) && attempt < MAX_RETRIES) {
+        const delayMs = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+        console.log(`Story text: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
+        await sleep(delayMs);
+        continue;
+      }
+      throw error;
+    }
+  }
+  if (!response) {
+    throw lastError instanceof Error ? lastError : new Error('Story text generation failed');
+  }
 
   const elapsed = Date.now() - startTime;
   console.log(`Story generated in ${elapsed}ms`);
