@@ -167,20 +167,6 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
-### FC-011: Apple Books-style page curl reader
-
-**Status:** Plan published
-**Size estimate:** L
-**Owner:** Zeshan
-**Plan file:** `docs/plans/fc-011.md`
-
-**Problem / opportunity:** The current reader uses `react-native-pager-view` (flat horizontal swipe) — a deliberate FC-001 trade-off. The original Figma mock had a drag-and-hold page curl matching Apple Books, which is core to the bedtime-story UX. Replace pager-view with a Skia + Reanimated curl effect ported from William Candillon's Riveo page curl demo.
-
-**Open questions:**
-- None — plan is published.
-
----
-
 ### FC-010: Parent dashboard & reading analytics
 
 **Status:** Consideration
@@ -205,3 +191,10 @@ Complete rewrite of all mobile screens to match the v2 Figma designs. Introduced
 
 - **Plan:** [docs/plans/fc-001.md](plans/fc-001.md)
 - **PR:** [#1](https://github.com/memon1987/ai-storybook-app/pull/1) (squash-merged as `669a7bc`)
+
+### FC-011: Apple Books-style page curl reader — Done 2026-04-24
+
+Replaced `react-native-pager-view` with a Skia + Reanimated page curl ported from William Candillon's Riveo shader. Drag-and-hold peels the current page to reveal the next. Forward curl shipped; backward turn is instant for now.
+
+- **Plan:** [docs/plans/fc-011.md](plans/fc-011.md)
+- **PR:** [#3](https://github.com/memon1987/ai-storybook-app/pull/3) (squash-merged as `53e4832`)
