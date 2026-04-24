@@ -1,22 +1,37 @@
+import { useCallback, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   FlatList,
-  TouchableOpacity,
   RefreshControl,
   Alert,
 } from 'react-native';
-import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withRepeat,
+  withSequence,
+  withTiming,
+  Easing,
+} from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getStories, deleteStory, Story } from '../../services/api';
-import { Colors } from '../../constants/Colors';
+import { useTheme } from '../../contexts/ThemeContext';
+import { GradientBackground } from '../../components/GradientBackground';
+import { StoryCard } from '../../components/StoryCard';
+import { AnimatedPressable } from '../../components/AnimatedPressable';
+
+const COLUMN_GAP = 14;
 
 export default function LibraryScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { palette } = useTheme();
+  const insets = useSafeAreaInsets();
 
   const { data: stories = [], isLoading, refetch, isRefetching } = useQuery({
     queryKey: ['stories'],
@@ -25,212 +40,233 @@ export default function LibraryScreen() {
 
   const deleteMutation = useMutation({
     mutationFn: deleteStory,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['stories'] });
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['stories'] }),
     onError: (error) => {
       const message = error instanceof Error ? error.message : 'Failed to delete story';
       Alert.alert('Error', message);
     },
   });
 
-  const handleStoryPress = (story: Story) => {
-    router.push(`/story/${story.id}/read`);
-  };
+  const handleStoryPress = useCallback(
+    (story: Story) => router.push(`/story/${story.id}/read`),
+    [router]
+  );
 
-  const handleDeletePress = (story: Story) => {
-    Alert.alert(
-      'Delete Story',
-      `Are you sure you want to delete "${story.title}"?`,
-      [
+  const handleStoryLongPress = useCallback(
+    (story: Story) =>
+      Alert.alert('Delete Story', `Remove "${story.title}" from your library?`, [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
           onPress: () => deleteMutation.mutate(story.id),
         },
-      ]
-    );
-  };
-
-  const renderStory = ({ item }: { item: Story }) => (
-    <TouchableOpacity
-      style={styles.storyCard}
-      onPress={() => handleStoryPress(item)}
-      onLongPress={() => handleDeletePress(item)}
-    >
-      <View style={styles.storyImageContainer}>
-        {item.pages && item.pages[0]?.imageUrl ? (
-          <Image
-            source={{ uri: item.pages[0].imageUrl }}
-            style={styles.storyImage}
-            contentFit="cover"
-          />
-        ) : (
-          <View style={styles.storyImagePlaceholder}>
-            <Ionicons name="book" size={40} color={Colors.light.textLight} />
-          </View>
-        )}
-      </View>
-      <View style={styles.storyInfo}>
-        <Text style={styles.storyTitle} numberOfLines={2}>
-          {item.title}
-        </Text>
-        <Text style={styles.storyMeta}>
-          For {item.childName} • {item.pageCount} pages
-        </Text>
-        <Text style={styles.storyDate}>
-          {new Date(item.createdAt).toLocaleDateString()}
-        </Text>
-      </View>
-    </TouchableOpacity>
+      ]),
+    [deleteMutation]
   );
 
-  const EmptyState = () => (
-    <View style={styles.emptyContainer}>
-      <Ionicons name="book-outline" size={80} color={Colors.light.textLight} />
-      <Text style={styles.emptyTitle}>No Stories Yet</Text>
-      <Text style={styles.emptySubtitle}>
-        Create your first magical storybook!
-      </Text>
-      <TouchableOpacity
-        style={styles.createButton}
-        onPress={() => router.push('/(tabs)/create')}
+  const renderItem = useCallback(
+    ({ item, index }: { item: Story; index: number }) => (
+      <View
+        style={[
+          styles.cell,
+          { marginLeft: index % 2 === 0 ? 0 : COLUMN_GAP },
+        ]}
       >
-        <Ionicons name="add" size={20} color={Colors.light.textOnPrimary} />
-        <Text style={styles.createButtonText}>Create Story</Text>
-      </TouchableOpacity>
-    </View>
+        <StoryCard
+          story={item}
+          onPress={handleStoryPress}
+          onLongPress={handleStoryLongPress}
+        />
+      </View>
+    ),
+    [handleStoryPress, handleStoryLongPress]
   );
 
   return (
-    <View style={styles.container}>
-      {stories.length === 0 && !isLoading ? (
-        <EmptyState />
-      ) : (
-        <FlatList
-          data={stories}
-          renderItem={renderStory}
-          keyExtractor={(item) => item.id}
-          numColumns={2}
-          contentContainerStyle={styles.listContent}
-          columnWrapperStyle={styles.row}
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefetching}
-              onRefresh={refetch}
-              tintColor={Colors.light.accent}
+    <GradientBackground colors={[palette.colors.background, palette.colors.cardBg]}>
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+        <View style={styles.headerLeft}>
+          <Text style={[styles.title, { color: palette.colors.textDark }]}>My Library</Text>
+          <Text style={[styles.subtitle, { color: palette.colors.textMuted }]}>
+            Tap a story to start reading
+          </Text>
+        </View>
+        <View style={[styles.countBadge, { backgroundColor: palette.colors.primary }]}>
+          <Text style={[styles.countText, { color: palette.colors.textDark }]}>
+            {stories.length}
+          </Text>
+        </View>
+      </View>
+
+      <FlatList
+        data={stories}
+        keyExtractor={(item) => item.id}
+        renderItem={renderItem}
+        numColumns={2}
+        contentContainerStyle={[
+          styles.listContent,
+          stories.length === 0 && styles.listContentEmpty,
+        ]}
+        ItemSeparatorComponent={() => <View style={{ height: COLUMN_GAP }} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefetching}
+            onRefresh={refetch}
+            tintColor={palette.colors.accent}
+          />
+        }
+        ListEmptyComponent={
+          !isLoading ? (
+            <EmptyState
+              palette={palette.colors}
+              onCreate={() => router.push('/(tabs)/create')}
             />
-          }
-          ListHeaderComponent={
-            <Text style={styles.headerText}>
-              {stories.length} {stories.length === 1 ? 'Story' : 'Stories'}
-            </Text>
-          }
-        />
-      )}
+          ) : null
+        }
+      />
+    </GradientBackground>
+  );
+}
+
+interface EmptyStateProps {
+  palette: {
+    primary: string;
+    accent: string;
+    textDark: string;
+    textMuted: string;
+  };
+  onCreate: () => void;
+}
+
+function EmptyState({ palette, onCreate }: EmptyStateProps) {
+  const bounce = useSharedValue(0);
+
+  useEffect(() => {
+    bounce.value = withRepeat(
+      withSequence(
+        withTiming(-10, { duration: 700, easing: Easing.inOut(Easing.cubic) }),
+        withTiming(0, { duration: 700, easing: Easing.inOut(Easing.cubic) })
+      ),
+      -1,
+      true
+    );
+  }, [bounce]);
+
+  const arrowStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: bounce.value }],
+  }));
+
+  return (
+    <View style={styles.emptyWrap}>
+      <View style={[styles.emptyIcon, { backgroundColor: palette.primary }]}>
+        <Ionicons name="book" size={48} color={palette.textDark} />
+      </View>
+      <Text style={[styles.emptyTitle, { color: palette.textDark }]}>No stories yet</Text>
+      <Text style={[styles.emptySubtitle, { color: palette.textMuted }]}>
+        Tap the Create tab below to make your first magical story.
+      </Text>
+      <AnimatedPressable
+        onPress={onCreate}
+        style={[styles.emptyCta, { backgroundColor: palette.accent }]}
+      >
+        <Ionicons name="sparkles" size={18} color="#FFFFFF" />
+        <Text style={styles.emptyCtaText}>Create Your First Story</Text>
+      </AnimatedPressable>
+      <Animated.View style={[styles.arrowDown, arrowStyle]}>
+        <Ionicons name="arrow-down" size={28} color={palette.textMuted} />
+      </Animated.View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  header: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+  },
+  headerLeft: {
     flex: 1,
-    backgroundColor: Colors.light.background,
+  },
+  title: {
+    fontFamily: 'Baloo2_700Bold',
+    fontSize: 28,
+  },
+  subtitle: {
+    fontFamily: 'Quicksand_500Medium',
+    fontSize: 13,
+    marginTop: 2,
+  },
+  countBadge: {
+    minWidth: 36,
+    height: 36,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  countText: {
+    fontFamily: 'Nunito_700Bold',
+    fontSize: 16,
   },
   listContent: {
-    padding: 16,
+    paddingHorizontal: 20,
+    paddingBottom: 100,
   },
-  row: {
-    justifyContent: 'space-between',
-  },
-  headerText: {
-    fontSize: 14,
-    fontFamily: 'Quicksand_500Medium',
-    color: Colors.light.textSecondary,
-    marginBottom: 16,
-  },
-  storyCard: {
-    width: '48%',
-    backgroundColor: Colors.light.card,
-    borderRadius: 16,
-    marginBottom: 16,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  storyImageContainer: {
-    width: '100%',
-    aspectRatio: 1,
-  },
-  storyImage: {
-    width: '100%',
-    height: '100%',
-  },
-  storyImagePlaceholder: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: Colors.light.backgroundSecondary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  storyInfo: {
-    padding: 12,
-  },
-  storyTitle: {
-    fontSize: 14,
-    fontFamily: 'Nunito_600SemiBold',
-    color: Colors.light.text,
-    marginBottom: 4,
-  },
-  storyMeta: {
-    fontSize: 12,
-    fontFamily: 'Quicksand_400Regular',
-    color: Colors.light.textSecondary,
-    marginBottom: 2,
-  },
-  storyDate: {
-    fontSize: 11,
-    fontFamily: 'Quicksand_400Regular',
-    color: Colors.light.textLight,
-  },
-  emptyContainer: {
+  listContentEmpty: {
     flex: 1,
-    justifyContent: 'center',
+  },
+  cell: {
+    flex: 1,
+  },
+  emptyWrap: {
+    flex: 1,
     alignItems: 'center',
-    padding: 40,
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+    gap: 14,
+    paddingBottom: 60,
+  },
+  emptyIcon: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
   },
   emptyTitle: {
-    fontSize: 24,
     fontFamily: 'Baloo2_700Bold',
-    color: Colors.light.text,
-    marginTop: 20,
+    fontSize: 22,
+    marginTop: 6,
   },
   emptySubtitle: {
-    fontSize: 16,
     fontFamily: 'Quicksand_500Medium',
-    color: Colors.light.textSecondary,
-    marginTop: 8,
+    fontSize: 14,
     textAlign: 'center',
   },
-  createButton: {
+  emptyCta: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.light.primary,
-    paddingVertical: 14,
-    paddingHorizontal: 24,
-    borderRadius: 12,
-    marginTop: 24,
     gap: 8,
+    paddingHorizontal: 20,
+    height: 52,
+    borderRadius: 999,
+    marginTop: 12,
   },
-  createButtonText: {
-    color: Colors.light.textOnPrimary,
-    fontSize: 16,
+  emptyCtaText: {
     fontFamily: 'Nunito_700Bold',
+    fontSize: 15,
+    color: '#FFFFFF',
+  },
+  arrowDown: {
+    marginTop: 16,
   },
 });

@@ -1,546 +1,687 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
   TextInput,
-  TouchableOpacity,
   StyleSheet,
   ScrollView,
   Alert,
-  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { generateStory, StoryInput, ArtStyle, StoryLength } from '../../services/api';
-import { Colors } from '../../constants/Colors';
+import Animated, {
+  SlideInRight,
+  SlideOutLeft,
+  useSharedValue,
+  useAnimatedStyle,
+  withRepeat,
+  withTiming,
+  Easing,
+  FadeIn,
+  FadeOut,
+} from 'react-native-reanimated';
+import { generateStory, ArtStyle, StoryLength, StoryInput } from '../../services/api';
+import { useTheme } from '../../contexts/ThemeContext';
+import { GradientBackground } from '../../components/GradientBackground';
+import { ProgressBar } from '../../components/ProgressBar';
+import { AnimatedPressable } from '../../components/AnimatedPressable';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const SETTINGS = [
-  { value: 'enchanted forest', label: 'Enchanted Forest' },
-  { value: 'outer space', label: 'Outer Space' },
-  { value: 'underwater kingdom', label: 'Underwater Kingdom' },
-  { value: 'magical castle', label: 'Magical Castle' },
-  { value: 'cozy village', label: 'Cozy Village' },
-  { value: 'dinosaur land', label: 'Dinosaur Land' },
-  { value: 'custom', label: 'Custom...' },
+const ANIMAL_SUGGESTIONS = [
+  'Bunny', 'Bear', 'Fox', 'Owl', 'Penguin', 'Lion', 'Elephant', 'Dolphin', 'Dragon', 'Unicorn',
 ];
 
-const MORALS = [
-  { value: 'kindness', label: 'Kindness' },
-  { value: 'bravery', label: 'Bravery' },
-  { value: 'sharing', label: 'Sharing' },
-  { value: 'honesty', label: 'Honesty' },
-  { value: 'friendship', label: 'Friendship' },
-  { value: 'perseverance', label: 'Perseverance' },
-  { value: 'custom', label: 'Custom...' },
+const SETTING_SUGGESTIONS = [
+  'Enchanted Forest', 'Outer Space', 'Underwater Kingdom', 'Magical Castle',
+  'Cozy Village', 'Dinosaur Land', 'Snowy Mountain', 'Candy World',
 ];
 
-const LENGTHS: { value: StoryLength; label: string; pages: string }[] = [
-  { value: 'short', label: 'Short', pages: '4 pages' },
-  { value: 'medium', label: 'Medium', pages: '6 pages' },
-  { value: 'long', label: 'Long', pages: '8 pages' },
+const MORAL_SUGGESTIONS = [
+  'Kindness', 'Bravery', 'Sharing', 'Honesty', 'Friendship', 'Perseverance',
 ];
 
-const ART_STYLES: { value: ArtStyle; label: string }[] = [
-  { value: 'watercolor', label: 'Watercolor' },
-  { value: 'cartoon', label: 'Cartoon' },
-  { value: 'storybook-classic', label: 'Classic' },
-  { value: 'claymation', label: 'Claymation' },
-  { value: 'studio-ghibli', label: 'Ghibli' },
-  { value: 'pixar-3d', label: 'Pixar 3D' },
+interface LengthOption {
+  value: StoryLength;
+  label: string;
+  pages: string;
+  time: string;
+}
+
+const LENGTH_OPTIONS: LengthOption[] = [
+  { value: 'short', label: 'Short', pages: '4 pages', time: '~5 min read' },
+  { value: 'medium', label: 'Medium', pages: '6 pages', time: '~8 min read' },
+  { value: 'long', label: 'Long', pages: '8 pages', time: '~12 min read' },
 ];
 
-const WRITING_STYLES = [
-  { value: 'Dr. Seuss', label: 'Dr. Seuss' },
-  { value: 'Eric Carle', label: 'Eric Carle' },
-  { value: 'Maurice Sendak', label: 'Sendak' },
-  { value: 'Shel Silverstein', label: 'Silverstein' },
-  { value: 'Julia Donaldson', label: 'Donaldson' },
-  { value: 'Roald Dahl', label: 'Roald Dahl' },
-  { value: 'Beatrix Potter', label: 'Potter' },
-  { value: 'Mo Willems', label: 'Mo Willems' },
-  { value: 'custom', label: 'Custom...' },
+interface ArtStyleOption {
+  value: ArtStyle;
+  label: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+}
+
+const ART_STYLE_OPTIONS: ArtStyleOption[] = [
+  { value: 'watercolor', label: 'Watercolor', icon: 'water-outline' },
+  { value: 'cartoon', label: 'Cartoon', icon: 'happy-outline' },
+  { value: 'storybook-classic', label: 'Classic', icon: 'book-outline' },
+  { value: 'claymation', label: 'Claymation', icon: 'cube-outline' },
+  { value: 'studio-ghibli', label: 'Ghibli', icon: 'leaf-outline' },
+  { value: 'pixar-3d', label: 'Pixar 3D', icon: 'star-outline' },
 ];
 
-export default function CreateStoryScreen() {
+const GENERATING_MESSAGES = [
+  'Sprinkling some magic dust…',
+  'Drawing the illustrations…',
+  'Weaving the words together…',
+  'Adding the finishing touches…',
+];
+
+interface FormData {
+  childName: string;
+  favoriteAnimal: string;
+  setting: string;
+  moral: string;
+  length: StoryLength;
+  artStyle: ArtStyle;
+}
+
+const TOTAL_STEPS = 6;
+
+const INITIAL_FORM: FormData = {
+  childName: '',
+  favoriteAnimal: '',
+  setting: '',
+  moral: '',
+  length: 'medium',
+  artStyle: 'watercolor',
+};
+
+export default function CreateScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { palette } = useTheme();
+  const insets = useSafeAreaInsets();
 
-  // Character fields
-  const [childName, setChildName] = useState('');
-  const [childGender, setChildGender] = useState<'boy' | 'girl' | null>(null);
-  const [specialFriendName, setSpecialFriendName] = useState('');
-  const [specialFriendDescription, setSpecialFriendDescription] = useState('');
-
-  // Story settings
-  const [setting, setSetting] = useState(SETTINGS[0].value);
-  const [customSetting, setCustomSetting] = useState('');
-  const [moral, setMoral] = useState(MORALS[0].value);
-  const [customMoral, setCustomMoral] = useState('');
-  const [length, setLength] = useState<StoryLength>('medium');
-
-  // Style
-  const [artStyle, setArtStyle] = useState<ArtStyle>('watercolor');
-  const [authorStyle, setAuthorStyle] = useState<string | null>(null);
-  const [customAuthorStyle, setCustomAuthorStyle] = useState('');
+  const [stepIndex, setStepIndex] = useState(0);
+  const [formData, setFormData] = useState<FormData>(INITIAL_FORM);
 
   const mutation = useMutation({
-    mutationFn: generateStory,
+    mutationFn: (input: StoryInput) => generateStory(input),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['stories'] });
-      router.push(`/story/${data.id}/preview`);
+      router.replace(`/story/${data.id}/read`);
+      setStepIndex(0);
+      setFormData(INITIAL_FORM);
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : 'Failed to generate story';
-      Alert.alert('Error', message);
+      Alert.alert('Generation failed', message);
     },
   });
 
-  const handleCreate = () => {
-    if (!childName.trim()) {
-      Alert.alert('Missing Info', "Please enter the child's name");
-      return;
-    }
-    if (!childGender) {
-      Alert.alert('Missing Info', 'Please select boy or girl');
-      return;
-    }
-    if (!specialFriendName.trim()) {
-      Alert.alert('Missing Info', "Please enter the special friend's name");
-      return;
-    }
-    if (!specialFriendDescription.trim()) {
-      Alert.alert('Missing Info', 'Please describe what the special friend is');
-      return;
-    }
+  const update = <K extends keyof FormData>(key: K, value: FormData[K]) =>
+    setFormData((prev) => ({ ...prev, [key]: value }));
 
-    const resolvedSetting = setting === 'custom' ? customSetting.trim() : setting;
-    const resolvedMoral = moral === 'custom' ? customMoral.trim() : moral;
-
-    if (!resolvedSetting) {
-      Alert.alert('Missing Info', 'Please enter a custom setting');
-      return;
+  const canContinue = useMemo(() => {
+    switch (stepIndex) {
+      case 0:
+        return formData.childName.trim().length > 0;
+      case 1:
+        return formData.favoriteAnimal.trim().length > 0;
+      case 2:
+        return formData.setting.trim().length > 0;
+      case 3:
+        return formData.moral.trim().length > 0;
+      case 4:
+      case 5:
+        return true;
+      default:
+        return false;
     }
-    if (!resolvedMoral) {
-      Alert.alert('Missing Info', 'Please enter a custom moral / lesson');
-      return;
+  }, [stepIndex, formData]);
+
+  const handleContinue = () => {
+    if (!canContinue) return;
+    if (stepIndex < TOTAL_STEPS - 1) {
+      setStepIndex((s) => s + 1);
+    } else {
+      mutation.mutate({
+        childName: formData.childName.trim(),
+        favoriteAnimal: formData.favoriteAnimal.trim(),
+        setting: formData.setting.trim().toLowerCase(),
+        moral: formData.moral.trim().toLowerCase(),
+        length: formData.length,
+        artStyle: formData.artStyle,
+      });
     }
-
-    const resolvedAuthorStyle =
-      authorStyle === 'custom'
-        ? customAuthorStyle.trim() || undefined
-        : authorStyle || undefined;
-
-    const input: StoryInput = {
-      childName: childName.trim(),
-      childGender,
-      specialFriendName: specialFriendName.trim(),
-      specialFriendDescription: specialFriendDescription.trim(),
-      setting: resolvedSetting,
-      moral: resolvedMoral,
-      length,
-      artStyle,
-      authorStyle: resolvedAuthorStyle,
-    };
-
-    mutation.mutate(input);
   };
 
-  if (mutation.isPending) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={Colors.light.accent} />
-        <Text style={styles.loadingTitle}>Creating Your Story</Text>
-        <Text style={styles.loadingSubtitle}>
-          Our AI is writing and illustrating a magical story just for {childName || 'you'}...
-        </Text>
-        <Text style={styles.loadingHint}>This may take up to a minute</Text>
-      </View>
-    );
-  }
+  const handleBack = () => {
+    if (stepIndex > 0) setStepIndex((s) => s - 1);
+  };
+
+  const progress = (stepIndex + 1) / TOTAL_STEPS;
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.sectionTitle}>Who is this story for?</Text>
+    <GradientBackground colors={[palette.colors.background, palette.colors.cardBg]}>
+      <View style={{ height: insets.top }} />
 
-      <Text style={styles.label}>Child's Name</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="Enter the child's name"
-        placeholderTextColor={Colors.light.textLight}
-        value={childName}
-        onChangeText={setChildName}
-        autoCapitalize="words"
-      />
-
-      <Text style={styles.label}>Boy or Girl</Text>
-      <View style={styles.optionsRow}>
-        <TouchableOpacity
-          style={[
-            styles.genderButton,
-            childGender === 'boy' && styles.optionButtonSelected,
-          ]}
-          onPress={() => setChildGender('boy')}
+      <View style={styles.headerRow}>
+        <Pressable
+          onPress={handleBack}
+          disabled={stepIndex === 0}
+          style={[styles.iconButton, { opacity: stepIndex === 0 ? 0 : 1 }]}
+          hitSlop={12}
         >
-          <Text
-            style={[
-              styles.optionText,
-              childGender === 'boy' && styles.optionTextSelected,
-            ]}
-          >
-            Boy
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.genderButton,
-            childGender === 'girl' && styles.optionButtonSelected,
-          ]}
-          onPress={() => setChildGender('girl')}
-        >
-          <Text
-            style={[
-              styles.optionText,
-              childGender === 'girl' && styles.optionTextSelected,
-            ]}
-          >
-            Girl
-          </Text>
-        </TouchableOpacity>
+          <Ionicons name="arrow-back" size={22} color={palette.colors.textDark} />
+        </Pressable>
+        <View style={styles.progressWrap}>
+          <View style={styles.progressMetaRow}>
+            <Text style={[styles.stepLabel, { color: palette.colors.textMuted }]}>
+              Step {stepIndex + 1} of {TOTAL_STEPS}
+            </Text>
+            <Text style={[styles.stepLabel, { color: palette.colors.textMuted }]}>
+              {Math.round(progress * 100)}%
+            </Text>
+          </View>
+          <ProgressBar
+            progress={progress}
+            trackColor={`${palette.colors.textMuted}22`}
+            fillColor={palette.colors.accent}
+            height={6}
+          />
+        </View>
       </View>
 
-      <Text style={styles.label}>Special Friend's Name</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g., Whiskers, Teddy, Max"
-        placeholderTextColor={Colors.light.textLight}
-        value={specialFriendName}
-        onChangeText={setSpecialFriendName}
-        autoCapitalize="words"
-      />
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Animated.View
+            key={stepIndex}
+            entering={SlideInRight.duration(280)}
+            exiting={SlideOutLeft.duration(280)}
+            style={styles.stepWrap}
+          >
+            {stepIndex === 0 && (
+              <TextStep
+                title="What's your child's name?"
+                subtitle="We'll make them the hero of the story."
+                placeholder="e.g. Maya"
+                value={formData.childName}
+                onChange={(v) => update('childName', v)}
+              />
+            )}
+            {stepIndex === 1 && (
+              <TextStep
+                title="What's their favorite animal?"
+                subtitle="Pick a buddy to join the adventure."
+                placeholder="e.g. Bunny"
+                value={formData.favoriteAnimal}
+                onChange={(v) => update('favoriteAnimal', v)}
+                suggestions={ANIMAL_SUGGESTIONS}
+              />
+            )}
+            {stepIndex === 2 && (
+              <TextStep
+                title="Where does the story happen?"
+                subtitle="Choose any magical setting."
+                placeholder="e.g. Enchanted Forest"
+                value={formData.setting}
+                onChange={(v) => update('setting', v)}
+                suggestions={SETTING_SUGGESTIONS}
+              />
+            )}
+            {stepIndex === 3 && (
+              <TextStep
+                title="What lesson should it teach?"
+                subtitle="A simple moral the story will carry."
+                placeholder="e.g. Kindness"
+                value={formData.moral}
+                onChange={(v) => update('moral', v)}
+                suggestions={MORAL_SUGGESTIONS}
+              />
+            )}
+            {stepIndex === 4 && (
+              <LengthStep
+                value={formData.length}
+                onChange={(v) => update('length', v)}
+              />
+            )}
+            {stepIndex === 5 && (
+              <ArtStyleStep
+                value={formData.artStyle}
+                onChange={(v) => update('artStyle', v)}
+              />
+            )}
+          </Animated.View>
+        </ScrollView>
+      </KeyboardAvoidingView>
 
-      <Text style={styles.label}>
-        What is {specialFriendName || 'your special friend'}?
+      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+        <AnimatedPressable
+          onPress={handleContinue}
+          disabled={!canContinue || mutation.isPending}
+          style={[
+            styles.primaryButton,
+            {
+              backgroundColor: palette.colors.accent,
+              opacity: canContinue && !mutation.isPending ? 1 : 0.5,
+            },
+          ]}
+        >
+          <Text style={styles.primaryButtonText}>
+            {stepIndex === TOTAL_STEPS - 1 ? 'Create Story' : 'Continue'}
+          </Text>
+          <Ionicons
+            name={stepIndex === TOTAL_STEPS - 1 ? 'sparkles' : 'arrow-forward'}
+            size={18}
+            color="#FFFFFF"
+          />
+        </AnimatedPressable>
+      </View>
+
+      {mutation.isPending && <GeneratingOverlay />}
+    </GradientBackground>
+  );
+}
+
+interface TextStepProps {
+  title: string;
+  subtitle: string;
+  placeholder: string;
+  value: string;
+  onChange: (v: string) => void;
+  suggestions?: string[];
+}
+
+function TextStep({ title, subtitle, placeholder, value, onChange, suggestions }: TextStepProps) {
+  const { palette } = useTheme();
+  return (
+    <View style={styles.step}>
+      <Text style={[styles.stepTitle, { color: palette.colors.textDark }]}>{title}</Text>
+      <Text style={[styles.stepSubtitle, { color: palette.colors.textMuted }]}>{subtitle}</Text>
+      <TextInput
+        style={[
+          styles.bigInput,
+          {
+            color: palette.colors.textDark,
+            backgroundColor: palette.colors.cardBg,
+            borderColor: `${palette.colors.textMuted}22`,
+          },
+        ]}
+        placeholder={placeholder}
+        placeholderTextColor={palette.colors.textMuted}
+        value={value}
+        onChangeText={onChange}
+        autoFocus
+      />
+      {suggestions && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chipRow}
+        >
+          {suggestions.map((s) => (
+            <AnimatedPressable
+              key={s}
+              onPress={() => onChange(s)}
+              style={[
+                styles.chip,
+                {
+                  backgroundColor:
+                    value.toLowerCase() === s.toLowerCase()
+                      ? palette.colors.primary
+                      : palette.colors.cardBg,
+                  borderColor: `${palette.colors.textMuted}22`,
+                },
+              ]}
+            >
+              <Text style={[styles.chipText, { color: palette.colors.textDark }]}>{s}</Text>
+            </AnimatedPressable>
+          ))}
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
+interface LengthStepProps {
+  value: StoryLength;
+  onChange: (v: StoryLength) => void;
+}
+
+function LengthStep({ value, onChange }: LengthStepProps) {
+  const { palette } = useTheme();
+  return (
+    <View style={styles.step}>
+      <Text style={[styles.stepTitle, { color: palette.colors.textDark }]}>
+        How long should it be?
       </Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g., a fluffy orange cat, a stuffed teddy bear, best friend from school"
-        placeholderTextColor={Colors.light.textLight}
-        value={specialFriendDescription}
-        onChangeText={setSpecialFriendDescription}
-        autoCapitalize="none"
-      />
-
-      <Text style={styles.sectionTitle}>Story Settings</Text>
-
-      <Text style={styles.label}>Setting</Text>
-      <View style={styles.optionsGrid}>
-        {SETTINGS.map((option) => (
-          <TouchableOpacity
-            key={option.value}
-            style={[
-              styles.optionButton,
-              setting === option.value && styles.optionButtonSelected,
-            ]}
-            onPress={() => setSetting(option.value)}
-          >
-            <Text
+      <Text style={[styles.stepSubtitle, { color: palette.colors.textMuted }]}>
+        Pick the length that fits tonight's bedtime.
+      </Text>
+      <View style={styles.lengthList}>
+        {LENGTH_OPTIONS.map((opt) => {
+          const selected = value === opt.value;
+          return (
+            <AnimatedPressable
+              key={opt.value}
+              onPress={() => onChange(opt.value)}
               style={[
-                styles.optionText,
-                setting === option.value && styles.optionTextSelected,
+                styles.lengthCard,
+                {
+                  backgroundColor: palette.colors.cardBg,
+                  borderColor: selected ? palette.colors.accent : `${palette.colors.textMuted}22`,
+                  borderWidth: selected ? 2 : 1,
+                },
               ]}
             >
-              {option.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+              <View style={styles.lengthCardLeft}>
+                <Text style={[styles.lengthLabel, { color: palette.colors.textDark }]}>
+                  {opt.label}
+                </Text>
+                <Text style={[styles.lengthMeta, { color: palette.colors.textMuted }]}>
+                  {opt.pages} • {opt.time}
+                </Text>
+              </View>
+              {selected && (
+                <View style={[styles.checkCircle, { backgroundColor: palette.colors.accent }]}>
+                  <Ionicons name="checkmark" size={16} color="#FFFFFF" />
+                </View>
+              )}
+            </AnimatedPressable>
+          );
+        })}
       </View>
-      {setting === 'custom' && (
-        <TextInput
-          style={[styles.input, styles.customInput]}
-          placeholder="Describe your story setting..."
-          placeholderTextColor={Colors.light.textLight}
-          value={customSetting}
-          onChangeText={setCustomSetting}
-          autoCapitalize="sentences"
-        />
-      )}
+    </View>
+  );
+}
 
-      <Text style={styles.label}>Moral / Lesson</Text>
-      <View style={styles.optionsGrid}>
-        {MORALS.map((option) => (
-          <TouchableOpacity
-            key={option.value}
-            style={[
-              styles.optionButton,
-              moral === option.value && styles.optionButtonSelected,
-            ]}
-            onPress={() => setMoral(option.value)}
-          >
-            <Text
+interface ArtStyleStepProps {
+  value: ArtStyle;
+  onChange: (v: ArtStyle) => void;
+}
+
+function ArtStyleStep({ value, onChange }: ArtStyleStepProps) {
+  const { palette } = useTheme();
+  return (
+    <View style={styles.step}>
+      <Text style={[styles.stepTitle, { color: palette.colors.textDark }]}>Pick an art style</Text>
+      <Text style={[styles.stepSubtitle, { color: palette.colors.textMuted }]}>
+        Each style gives the story a different feel.
+      </Text>
+      <View style={styles.styleGrid}>
+        {ART_STYLE_OPTIONS.map((opt) => {
+          const selected = value === opt.value;
+          return (
+            <AnimatedPressable
+              key={opt.value}
+              onPress={() => onChange(opt.value)}
               style={[
-                styles.optionText,
-                moral === option.value && styles.optionTextSelected,
+                styles.styleCard,
+                {
+                  backgroundColor: palette.colors.cardBg,
+                  borderColor: selected ? palette.colors.accent : `${palette.colors.textMuted}22`,
+                  borderWidth: selected ? 2 : 1,
+                },
               ]}
             >
-              {option.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+              <View
+                style={[
+                  styles.styleIconWrap,
+                  { backgroundColor: selected ? palette.colors.primary : palette.colors.background },
+                ]}
+              >
+                <Ionicons name={opt.icon} size={28} color={palette.colors.textDark} />
+              </View>
+              <Text
+                style={[styles.styleLabel, { color: palette.colors.textDark }]}
+                numberOfLines={1}
+              >
+                {opt.label}
+              </Text>
+            </AnimatedPressable>
+          );
+        })}
       </View>
-      {moral === 'custom' && (
-        <TextInput
-          style={[styles.input, styles.customInput]}
-          placeholder="What lesson should the story teach?"
-          placeholderTextColor={Colors.light.textLight}
-          value={customMoral}
-          onChangeText={setCustomMoral}
-          autoCapitalize="sentences"
-        />
-      )}
+    </View>
+  );
+}
 
-      <Text style={styles.label}>Story Length</Text>
-      <View style={styles.optionsRow}>
-        {LENGTHS.map((option) => (
-          <TouchableOpacity
-            key={option.value}
-            style={[
-              styles.lengthButton,
-              length === option.value && styles.optionButtonSelected,
-            ]}
-            onPress={() => setLength(option.value)}
-          >
-            <Text
-              style={[
-                styles.optionText,
-                length === option.value && styles.optionTextSelected,
-              ]}
-            >
-              {option.label}
-            </Text>
-            <Text
-              style={[
-                styles.lengthPages,
-                length === option.value && styles.optionTextSelected,
-              ]}
-            >
-              {option.pages}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+function GeneratingOverlay() {
+  const { palette } = useTheme();
+  const [messageIndex, setMessageIndex] = useState(0);
+  const rotate = useSharedValue(0);
+  const [progressTick, setProgressTick] = useState(0.05);
 
-      <Text style={styles.sectionTitle}>Style</Text>
+  useEffect(() => {
+    rotate.value = withRepeat(
+      withTiming(360, { duration: 2400, easing: Easing.linear }),
+      -1,
+      false
+    );
+    const id = setInterval(
+      () => setMessageIndex((i) => (i + 1) % GENERATING_MESSAGES.length),
+      2200
+    );
+    const progressId = setInterval(() => {
+      setProgressTick((p) => p + (0.95 - p) * 0.04);
+    }, 1500);
+    return () => {
+      clearInterval(id);
+      clearInterval(progressId);
+    };
+  }, [rotate]);
 
-      <Text style={styles.label}>Writing Style (optional)</Text>
-      <View style={styles.artStyleGrid}>
-        {WRITING_STYLES.map((option) => (
-          <TouchableOpacity
-            key={option.value}
-            style={[
-              styles.artStyleButton,
-              authorStyle === option.value && styles.optionButtonSelected,
-            ]}
-            onPress={() =>
-              setAuthorStyle(authorStyle === option.value ? null : option.value)
-            }
-          >
-            <Text
-              style={[
-                styles.optionText,
-                authorStyle === option.value && styles.optionTextSelected,
-              ]}
-            >
-              {option.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-      {authorStyle === 'custom' && (
-        <TextInput
-          style={[styles.input, styles.customInput]}
-          placeholder="Enter an author or writing style..."
-          placeholderTextColor={Colors.light.textLight}
-          value={customAuthorStyle}
-          onChangeText={setCustomAuthorStyle}
-          autoCapitalize="words"
-        />
-      )}
+  const iconStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${rotate.value}deg` }],
+  }));
 
-      <Text style={styles.label}>Art Style</Text>
-      <View style={styles.artStyleGrid}>
-        {ART_STYLES.map((option) => (
-          <TouchableOpacity
-            key={option.value}
-            style={[
-              styles.artStyleButton,
-              artStyle === option.value && styles.optionButtonSelected,
-            ]}
-            onPress={() => setArtStyle(option.value)}
-          >
-            <Text
-              style={[
-                styles.optionText,
-                artStyle === option.value && styles.optionTextSelected,
-              ]}
-            >
-              {option.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <TouchableOpacity style={styles.createButton} onPress={handleCreate}>
-        <Text style={styles.createButtonText}>Create Story</Text>
-      </TouchableOpacity>
-    </ScrollView>
+  return (
+    <Animated.View
+      entering={FadeIn.duration(200)}
+      exiting={FadeOut.duration(200)}
+      style={StyleSheet.absoluteFill}
+    >
+      <GradientBackground colors={[palette.colors.background, palette.colors.secondary]}>
+        <View style={styles.overlayCenter}>
+          <Animated.View style={iconStyle}>
+            <Ionicons name="book" size={96} color={palette.colors.accent} />
+          </Animated.View>
+          <Text style={[styles.overlayTitle, { color: palette.colors.textDark }]}>
+            {GENERATING_MESSAGES[messageIndex]}
+          </Text>
+          <Text style={[styles.overlaySubtitle, { color: palette.colors.textMuted }]}>
+            This usually takes about a minute.
+          </Text>
+          <View style={styles.overlayProgressWrap}>
+            <ProgressBar
+              progress={progressTick}
+              trackColor={`${palette.colors.textMuted}33`}
+              fillColor={palette.colors.accent}
+              height={6}
+              duration={1500}
+            />
+          </View>
+        </View>
+      </GradientBackground>
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.light.background,
-  },
-  content: {
-    padding: 20,
-    paddingBottom: 40,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontFamily: 'Nunito_700Bold',
-    color: Colors.light.text,
-    marginTop: 16,
-    marginBottom: 16,
-  },
-  label: {
-    fontSize: 14,
-    fontFamily: 'Nunito_600SemiBold',
-    color: Colors.light.textSecondary,
-    marginBottom: 8,
-    marginTop: 8,
-  },
-  input: {
-    backgroundColor: Colors.light.card,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
-    fontFamily: 'Quicksand_400Regular',
-    color: Colors.light.text,
-  },
-  customInput: {
-    marginTop: 8,
-  },
-  optionsGrid: {
+  flex: { flex: 1 },
+  headerRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  optionsRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  artStyleGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  optionButton: {
-    backgroundColor: Colors.light.card,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: 10,
-    paddingVertical: 10,
+    alignItems: 'center',
     paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+    gap: 12,
   },
-  optionButtonSelected: {
-    backgroundColor: Colors.light.secondary,
-    borderColor: Colors.light.secondary,
-  },
-  optionText: {
-    fontSize: 14,
-    fontFamily: 'Quicksand_500Medium',
-    color: Colors.light.text,
-    textAlign: 'center',
-  },
-  optionTextSelected: {
-    color: '#FFFFFF',
-    fontFamily: 'Quicksand_600SemiBold',
-  },
-  genderButton: {
-    flex: 1,
-    backgroundColor: Colors.light.card,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: 10,
-    paddingVertical: 14,
+  iconButton: {
+    width: 36,
+    height: 36,
     alignItems: 'center',
-  },
-  lengthButton: {
-    flex: 1,
-    backgroundColor: Colors.light.card,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    alignItems: 'center',
-  },
-  lengthPages: {
-    fontSize: 12,
-    fontFamily: 'Quicksand_400Regular',
-    color: Colors.light.textLight,
-    marginTop: 4,
-  },
-  artStyleButton: {
-    width: '31%',
-    backgroundColor: Colors.light.card,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 8,
-    alignItems: 'center',
-  },
-  createButton: {
-    backgroundColor: Colors.light.primary,
-    borderRadius: 12,
-    padding: 18,
-    alignItems: 'center',
-    marginTop: 32,
-  },
-  createButtonText: {
-    color: Colors.light.textOnPrimary,
-    fontSize: 18,
-    fontFamily: 'Nunito_700Bold',
-  },
-  loadingContainer: {
-    flex: 1,
     justifyContent: 'center',
-    alignItems: 'center',
-    padding: 40,
-    backgroundColor: Colors.light.background,
   },
-  loadingTitle: {
-    fontSize: 24,
+  progressWrap: {
+    flex: 1,
+  },
+  progressMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  stepLabel: {
+    fontFamily: 'Quicksand_600SemiBold',
+    fontSize: 12,
+  },
+  scroll: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
+    paddingVertical: 24,
+  },
+  stepWrap: {
+    flex: 1,
+  },
+  step: {
+    gap: 12,
+  },
+  stepTitle: {
     fontFamily: 'Baloo2_700Bold',
-    color: Colors.light.accent,
-    marginTop: 24,
-    textAlign: 'center',
+    fontSize: 26,
+    lineHeight: 32,
   },
-  loadingSubtitle: {
-    fontSize: 16,
+  stepSubtitle: {
     fontFamily: 'Quicksand_500Medium',
-    color: Colors.light.textSecondary,
-    marginTop: 12,
-    textAlign: 'center',
-    lineHeight: 24,
-  },
-  loadingHint: {
     fontSize: 14,
-    fontFamily: 'Quicksand_400Regular',
-    color: Colors.light.textLight,
+    marginBottom: 8,
+  },
+  bigInput: {
+    height: 64,
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    fontFamily: 'Nunito_600SemiBold',
+    fontSize: 18,
+  },
+  chipRow: {
+    gap: 8,
+    paddingVertical: 4,
+  },
+  chip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  chipText: {
+    fontFamily: 'Quicksand_600SemiBold',
+    fontSize: 13,
+  },
+  lengthList: {
+    gap: 12,
+    marginTop: 8,
+  },
+  lengthCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+  lengthCardLeft: {
+    flex: 1,
+  },
+  lengthLabel: {
+    fontFamily: 'Nunito_700Bold',
+    fontSize: 17,
+    marginBottom: 2,
+  },
+  lengthMeta: {
+    fontFamily: 'Quicksand_500Medium',
+    fontSize: 13,
+  },
+  checkCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  styleGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 8,
+  },
+  styleCard: {
+    width: '31%',
+    aspectRatio: 0.85,
+    borderRadius: 18,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  styleIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  styleLabel: {
+    fontFamily: 'Nunito_600SemiBold',
+    fontSize: 13,
+  },
+  footer: {
+    paddingHorizontal: 24,
+    paddingTop: 12,
+  },
+  primaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    height: 56,
+    borderRadius: 999,
+  },
+  primaryButtonText: {
+    fontFamily: 'Nunito_700Bold',
+    fontSize: 16,
+    color: '#FFFFFF',
+  },
+  overlayCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+    gap: 16,
+  },
+  overlayTitle: {
+    fontFamily: 'Baloo2_700Bold',
+    fontSize: 22,
+    textAlign: 'center',
     marginTop: 24,
+  },
+  overlaySubtitle: {
+    fontFamily: 'Quicksand_500Medium',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  overlayProgressWrap: {
+    width: '70%',
+    marginTop: 12,
   },
 });
