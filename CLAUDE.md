@@ -1,5 +1,59 @@
 # AI Storybook App - Claude Code Guide
 
+## Plan-First Development
+
+**CRITICAL RULE:** Medium and large code changes must have a published execution plan in `docs/plans/` before any code is written. Ideas that have not yet graduated to a plan live in `docs/FUTURE_CONSIDERATIONS.md`.
+
+### Lifecycle
+```
+docs/FUTURE_CONSIDERATIONS.md  →  docs/plans/fc-NNN.md  →  code change
+        (FC entry)                  (published plan)        (commit/PR)
+```
+
+### Plan file naming
+Plan files must be named `fc-NNN.md` matching their FUTURE_CONSIDERATIONS entry number for traceability (e.g., FC-006 → `docs/plans/fc-006.md`).
+
+### What counts as "medium or large"
+Any change that meets **any** of the following requires a plan file:
+- Roughly 50+ lines changed
+- Touches more than one screen or service file
+- Alters runtime behavior, API contracts, or auth flow
+- Adds or removes dependencies
+- Changes deployment, CI, or app configuration
+
+What is **exempt** (no plan needed):
+- Typos, comment/docstring edits, formatting
+- Single-file, isolated bug fixes under ~50 lines that don't change behavior
+- Edits to `docs/FUTURE_CONSIDERATIONS.md`, `docs/plans/*`, and release notes
+- Test-only additions that don't change production code
+
+### Enforcement for Claude Code sessions
+When the user requests a change that qualifies as medium/large:
+1. Check `docs/plans/` for a plan file matching the work.
+2. If no plan exists, **stop and surface it**: point at the relevant FC entry (or propose one) and ask the user to either (a) have a plan drafted first or (b) explicitly override.
+3. Do **not** start coding until one of those two paths is chosen.
+
+### Override
+The user may override the plan requirement by saying so explicitly. When overridden, note the override in the commit message (e.g., `[no-plan: reason]`).
+
+### Referencing plans
+- Commit messages and PR descriptions should include: `Plan: docs/plans/fc-NNN.md`.
+- After merge, update the FC entry's status and move it to "Completed" with a link to the plan and commit/PR.
+- **One PR per FC:** Each FC must have its own dedicated PR for clean rollback.
+
+### Post-execution plan updates
+After implementation is complete, update the plan file:
+- Change `**Status:**` to `Executing` (PR open) or `Done` (PR merged)
+- Add PR URL, commit SHA, date, and deviation notes to the `## Execution` section
+
+### Files
+- `docs/FUTURE_CONSIDERATIONS.md` — pre-plan ideas, FC-NNN format
+- `docs/plans/README.md` — plan workflow, index, naming
+- `docs/plans/_template.md` — template to copy for new plans
+- `docs/plans/fc-NNN.md` — individual published plans
+
+---
+
 ## Project Overview
 
 **AI Storybook App** is a mobile application that generates personalized children's storybooks using AI. Parents input their child's name, favorite animal, setting, and moral lesson, and the app generates a complete illustrated story with text embedded directly into the illustrations (Dr. Seuss/Pout-Pout Fish style).

@@ -1,0 +1,202 @@
+# Future Considerations
+
+A running list of things we want to **research and write a plan for** before coding. This file is a **precursor to todos**, not a todo list itself. Entries here are ideas and open questions — they become actionable only after a plan file is published in `docs/plans/`.
+
+## Lifecycle
+
+```
+1. Consideration  →  added here, loosely scoped, questions open
+2. Research        →  investigation, data gathering, comments, alternatives
+3. Plan published  →  a file in docs/plans/fc-NNN.md with the agreed approach
+4. Execution       →  code changes are made against the plan
+5. Archived        →  moved to "Completed" below with a link to the plan + PR
+```
+
+**Rule of thumb:** nothing graduates from this file into code until step 3 is done. See project `CLAUDE.md` ("Plan-First Development") for the enforcement rule.
+
+---
+
+## Entry template
+
+Copy this when adding a new consideration. Keep it short — detail belongs in the eventual plan file, not here.
+
+```markdown
+### FC-NNN: <short title>
+
+**Status:** Consideration | Researching | Plan drafted | Plan published | Executing | Done
+**Size estimate:** S | M | L  (M/L require a plan file before code changes)
+**Owner:** <who is thinking about this>
+**Plan file:** `docs/plans/fc-NNN.md` (once published)
+
+**Problem / opportunity:** 1–3 sentences on what prompted this.
+
+**Open questions:**
+- ...
+- ...
+```
+
+---
+
+## Active Considerations
+
+### FC-001: Frontend redesign (Figma v2)
+
+**Status:** Plan published
+**Size estimate:** L
+**Owner:** Zeshan
+**Plan file:** `docs/plans/fc-001.md`
+
+**Problem / opportunity:** Current mobile UI is functional but basic. A complete redesign was done in Figma Make with 6 switchable color palettes, Typeform-style story creation wizard, animated splash screen, custom tab bar, and landscape story reader. Need to rebuild all screens to match.
+
+**Open questions:**
+- None — plan is published.
+
+---
+
+### FC-002: Image model cost optimization
+
+**Status:** Consideration
+**Size estimate:** M
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** Currently using `gemini-3-pro-image-preview` at ~$0.13/image. `gemini-3.1-flash-image-preview` costs $0.045/image (66% savings) and Imagen 4 Standard costs $0.04/image. Need to benchmark text-in-image accuracy before switching.
+
+**Open questions:**
+- Does `gemini-3.1-flash-image-preview` maintain 90%+ text rendering accuracy for Dr. Seuss style embedded text?
+- Can we use Imagen 4 for pages with minimal text and Gemini 3 Pro for text-heavy pages (hybrid approach)?
+- What's the latency difference between models?
+
+---
+
+### FC-003: Text-to-speech narration
+
+**Status:** Consideration
+**Size estimate:** L
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** Parents want to use the app as a bedtime story reader. Adding AI narration would let children listen while viewing illustrations.
+
+**Open questions:**
+- Google Cloud TTS vs ElevenLabs vs other providers?
+- Per-page audio or full-story audio?
+- Offline caching of audio?
+- Cost per story narration?
+
+---
+
+### FC-004: Multi-language support
+
+**Status:** Consideration
+**Size estimate:** L
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** Expand to non-English-speaking families. Story text generation, UI localization, and text-in-image rendering all need to support multiple languages.
+
+**Open questions:**
+- Which languages first? Spanish, French, Mandarin?
+- Does Gemini 3 Pro Image render non-Latin scripts accurately?
+- i18n framework for the mobile app?
+
+---
+
+### FC-005: Story sharing & gifting
+
+**Status:** Consideration
+**Size estimate:** M
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** Let parents share stories with family members or gift personalized stories to other families.
+
+**Open questions:**
+- Share as read-only link or transferable asset?
+- Deep linking into the app?
+- Privacy implications of sharing child data?
+
+---
+
+### FC-006: Subscription & payment integration
+
+**Status:** Consideration
+**Size estimate:** L
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** Monetization. Free tier (N stories/month) + paid subscription for unlimited generation.
+
+**Open questions:**
+- RevenueCat vs direct Apple/Google IAP?
+- Pricing tiers?
+- What constitutes the free tier limit?
+
+---
+
+### FC-007: Offline story caching
+
+**Status:** Consideration
+**Size estimate:** M
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** Stories should be readable without internet after initial download. Important for airplane/car use cases.
+
+**Open questions:**
+- Cache images locally via expo-file-system?
+- How much local storage per story (5-12 images)?
+- Eviction policy?
+
+---
+
+### FC-008: Security hardening
+
+**Status:** Consideration
+**Size estimate:** S
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** Firebase client config and API URL are hardcoded in source. Should use environment variables / build-time config.
+
+**Open questions:**
+- Use `app.config.js` with `EXPO_PUBLIC_*` env vars?
+- Any other secrets to audit?
+
+---
+
+### FC-009: Infrastructure improvements
+
+**Status:** Consideration
+**Size estimate:** M
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** No staging environment, no build notifications, no monitoring/alerting on Cloud Run.
+
+**Open questions:**
+- Staging Cloud Run service with separate Firestore collection?
+- Slack webhook for Cloud Build failures?
+- What latency/error thresholds to alert on?
+
+---
+
+### FC-010: Parent dashboard & reading analytics
+
+**Status:** Consideration
+**Size estimate:** L
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** Parents want to see reading habits — stories read, time spent, favorite themes.
+
+**Open questions:**
+- Track events in Firestore or dedicated analytics (Mixpanel, Amplitude)?
+- Privacy-first design (data stays local vs cloud)?
+- Visualizations in-app or web dashboard?
+
+---
+
+## Completed
+
+_Move completed FC entries here with links to plan + PR._

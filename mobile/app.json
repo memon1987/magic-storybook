@@ -42,8 +42,9 @@
         "origin": false
       },
       "eas": {
-        "projectId": "your-eas-project-id"
+        "projectId": "80714c3b-8ec4-469e-80a7-e8d9bbbaf1e5"
       }
-    }
+    },
+    "owner": "memon1987"
   }
 }
