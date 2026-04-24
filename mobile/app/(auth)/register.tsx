@@ -3,17 +3,23 @@ import {
   View,
   Text,
   TextInput,
-  TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   Alert,
+  ScrollView,
 } from 'react-native';
 import { Link } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../hooks/useAuth';
-import { Colors } from '../../constants/Colors';
+import { useTheme } from '../../contexts/ThemeContext';
+import { GradientBackground } from '../../components/GradientBackground';
+import { SectionCard } from '../../components/SectionCard';
+import { AnimatedPressable } from '../../components/AnimatedPressable';
 
 export default function RegisterScreen() {
+  const { palette } = useTheme();
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -21,18 +27,16 @@ export default function RegisterScreen() {
   const { signup } = useAuth();
 
   const handleRegister = async () => {
-    if (!email || !password || !confirmPassword) {
-      Alert.alert('Error', 'Please fill in all fields');
+    if (!name || !email || !password || !confirmPassword) {
+      Alert.alert('Missing info', 'Please fill in every field.');
       return;
     }
-
     if (password !== confirmPassword) {
-      Alert.alert('Error', 'Passwords do not match');
+      Alert.alert('Passwords don’t match', 'Make sure both password fields match.');
       return;
     }
-
     if (password.length < 6) {
-      Alert.alert('Error', 'Password must be at least 6 characters');
+      Alert.alert('Password too short', 'Use at least 6 characters.');
       return;
     }
 
@@ -41,156 +45,186 @@ export default function RegisterScreen() {
       await signup(email, password);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Registration failed';
-      Alert.alert('Registration Failed', message);
+      Alert.alert('Registration failed', message);
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <View style={styles.content}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Create Account</Text>
-          <Text style={styles.subtitle}>Start creating magical stories today</Text>
-        </View>
+    <GradientBackground colors={[palette.colors.background, palette.colors.secondary]}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={[styles.iconCircle, { backgroundColor: palette.colors.primary }]}>
+            <Ionicons name="sparkles" size={40} color={palette.colors.textDark} />
+          </View>
 
-        <View style={styles.form}>
-          <Text style={styles.label}>Email</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter your email"
-            placeholderTextColor={Colors.light.textLight}
-            value={email}
-            onChangeText={setEmail}
-            autoCapitalize="none"
-            keyboardType="email-address"
-            autoComplete="email"
-          />
+          <Text style={[styles.title, { color: palette.colors.textDark }]}>Create your account</Text>
+          <Text style={[styles.subtitle, { color: palette.colors.textMuted }]}>
+            Start crafting magical stories today.
+          </Text>
 
-          <Text style={styles.label}>Password</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Create a password"
-            placeholderTextColor={Colors.light.textLight}
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            autoComplete="new-password"
-          />
+          <SectionCard style={styles.card}>
+            <Text style={[styles.label, { color: palette.colors.textDark }]}>Your name</Text>
+            <TextInput
+              style={[styles.input, { color: palette.colors.textDark, backgroundColor: palette.colors.background }]}
+              placeholder="Parent or guardian name"
+              placeholderTextColor={palette.colors.textMuted}
+              value={name}
+              onChangeText={setName}
+              autoCapitalize="words"
+              autoComplete="name"
+              editable={!isLoading}
+            />
 
-          <Text style={styles.label}>Confirm Password</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Confirm your password"
-            placeholderTextColor={Colors.light.textLight}
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            secureTextEntry
-            autoComplete="new-password"
-          />
+            <Text style={[styles.label, { color: palette.colors.textDark }]}>Email</Text>
+            <TextInput
+              style={[styles.input, { color: palette.colors.textDark, backgroundColor: palette.colors.background }]}
+              placeholder="you@example.com"
+              placeholderTextColor={palette.colors.textMuted}
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              autoComplete="email"
+              editable={!isLoading}
+            />
 
-          <TouchableOpacity
-            style={[styles.button, isLoading && styles.buttonDisabled]}
-            onPress={handleRegister}
-            disabled={isLoading}
-          >
-            <Text style={styles.buttonText}>
-              {isLoading ? 'Creating account...' : 'Create Account'}
+            <Text style={[styles.label, { color: palette.colors.textDark }]}>Password</Text>
+            <TextInput
+              style={[styles.input, { color: palette.colors.textDark, backgroundColor: palette.colors.background }]}
+              placeholder="At least 6 characters"
+              placeholderTextColor={palette.colors.textMuted}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              autoComplete="new-password"
+              editable={!isLoading}
+            />
+
+            <Text style={[styles.label, { color: palette.colors.textDark }]}>Confirm password</Text>
+            <TextInput
+              style={[styles.input, { color: palette.colors.textDark, backgroundColor: palette.colors.background }]}
+              placeholder="Re-enter your password"
+              placeholderTextColor={palette.colors.textMuted}
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              secureTextEntry
+              autoComplete="new-password"
+              editable={!isLoading}
+            />
+
+            <AnimatedPressable
+              onPress={handleRegister}
+              disabled={isLoading}
+              style={[
+                styles.primaryButton,
+                { backgroundColor: palette.colors.accent, opacity: isLoading ? 0.6 : 1 },
+              ]}
+            >
+              <Text style={[styles.primaryButtonText, { color: '#FFFFFF' }]}>
+                {isLoading ? 'Creating account…' : 'Create Account'}
+              </Text>
+            </AnimatedPressable>
+          </SectionCard>
+
+          <View style={styles.footer}>
+            <Text style={[styles.footerText, { color: palette.colors.textMuted }]}>
+              Already have an account?{' '}
             </Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>Already have an account? </Text>
-          <Link href="/(auth)/login" asChild>
-            <TouchableOpacity>
-              <Text style={styles.linkText}>Sign In</Text>
-            </TouchableOpacity>
-          </Link>
-        </View>
-      </View>
-    </KeyboardAvoidingView>
+            <Link href="/(auth)/login" asChild>
+              <AnimatedPressable>
+                <Text style={[styles.linkText, { color: palette.colors.accent }]}>Sign In</Text>
+              </AnimatedPressable>
+            </Link>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </GradientBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.light.background,
-  },
-  content: {
-    flex: 1,
-    padding: 24,
+  flex: { flex: 1 },
+  scroll: {
+    flexGrow: 1,
     justifyContent: 'center',
-  },
-  header: {
+    paddingHorizontal: 24,
+    paddingVertical: 40,
     alignItems: 'center',
-    marginBottom: 48,
+  },
+  iconCircle: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
   },
   title: {
-    fontSize: 32,
     fontFamily: 'Baloo2_700Bold',
-    color: Colors.light.accent,
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    fontFamily: 'Quicksand_500Medium',
-    color: Colors.light.textSecondary,
+    fontSize: 30,
+    marginBottom: 6,
     textAlign: 'center',
   },
-  form: {
-    marginBottom: 32,
+  subtitle: {
+    fontFamily: 'Quicksand_500Medium',
+    fontSize: 15,
+    marginBottom: 28,
+    textAlign: 'center',
+  },
+  card: {
+    width: '100%',
+    gap: 4,
   },
   label: {
-    fontSize: 14,
     fontFamily: 'Nunito_600SemiBold',
-    color: Colors.light.text,
-    marginBottom: 8,
-  },
-  input: {
-    backgroundColor: Colors.light.card,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
-    fontFamily: 'Quicksand_400Regular',
-    marginBottom: 16,
-    color: Colors.light.text,
-  },
-  button: {
-    backgroundColor: Colors.light.primary,
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
+    fontSize: 13,
+    marginBottom: 6,
     marginTop: 8,
   },
-  buttonDisabled: {
-    opacity: 0.6,
+  input: {
+    borderRadius: 16,
+    height: 56,
+    paddingHorizontal: 16,
+    fontFamily: 'Quicksand_500Medium',
+    fontSize: 15,
+    marginBottom: 4,
   },
-  buttonText: {
-    color: Colors.light.textOnPrimary,
-    fontSize: 16,
+  primaryButton: {
+    height: 56,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+  },
+  primaryButtonText: {
     fontFamily: 'Nunito_700Bold',
+    fontSize: 16,
   },
   footer: {
     flexDirection: 'row',
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 24,
   },
   footerText: {
-    color: Colors.light.textSecondary,
+    fontFamily: 'Quicksand_500Medium',
     fontSize: 14,
-    fontFamily: 'Quicksand_400Regular',
   },
   linkText: {
-    color: Colors.light.accent,
+    fontFamily: 'Nunito_700Bold',
     fontSize: 14,
-    fontFamily: 'Nunito_600SemiBold',
   },
 });
