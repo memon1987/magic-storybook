@@ -170,19 +170,16 @@ interface RowProps {
 }
 
 function Row({ row, palette, isLast }: RowProps) {
-  const Container: any = row.onPress ? Pressable : View;
-  return (
-    <Container
-      onPress={row.onPress}
-      disabled={row.disabled || !row.onPress}
-      style={[
-        styles.row,
-        !isLast && {
-          borderBottomWidth: StyleSheet.hairlineWidth,
-          borderBottomColor: `${palette.textMuted}22`,
-        },
-      ]}
-    >
+  const rowStyle = [
+    styles.row,
+    !isLast && {
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: `${palette.textMuted}22`,
+    },
+  ];
+
+  const content = (
+    <>
       <View style={[styles.rowIcon, { backgroundColor: palette.background }]}>
         <Ionicons
           name={row.icon}
@@ -206,8 +203,17 @@ function Row({ row, palette, isLast }: RowProps) {
       {row.onPress && (
         <Ionicons name="chevron-forward" size={18} color={palette.textMuted} />
       )}
-    </Container>
+    </>
   );
+
+  if (row.onPress) {
+    return (
+      <Pressable onPress={row.onPress} disabled={row.disabled} style={rowStyle}>
+        {content}
+      </Pressable>
+    );
+  }
+  return <View style={rowStyle}>{content}</View>;
 }
 
 const styles = StyleSheet.create({

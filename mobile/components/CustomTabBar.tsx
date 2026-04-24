@@ -45,6 +45,10 @@ export function CustomTabBar({ state, navigation }: BottomTabBarProps) {
     );
   }, [state.index, tabWidth, indicatorX]);
 
+  const activeIsElevated = TAB_CONFIG.find(
+    (t) => t.routeName === state.routes[state.index]?.name
+  )?.elevated ?? false;
+
   const indicatorStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: indicatorX.value }],
   }));
@@ -59,13 +63,15 @@ export function CustomTabBar({ state, navigation }: BottomTabBarProps) {
         },
       ]}
     >
-      <Animated.View
-        style={[
-          styles.indicator,
-          { backgroundColor: palette.colors.accent, top: 6 },
-          indicatorStyle,
-        ]}
-      />
+      {!activeIsElevated && (
+        <Animated.View
+          style={[
+            styles.indicator,
+            { backgroundColor: palette.colors.accent, top: 6 },
+            indicatorStyle,
+          ]}
+        />
+      )}
 
       {state.routes.map((route, index) => {
         const config =

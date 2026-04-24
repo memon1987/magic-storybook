@@ -113,8 +113,6 @@ export default function CreateScreen() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['stories'] });
       router.replace(`/story/${data.id}/read`);
-      setStepIndex(0);
-      setFormData(INITIAL_FORM);
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : 'Failed to generate story';
