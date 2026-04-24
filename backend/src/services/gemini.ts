@@ -22,10 +22,13 @@ const bucketName = process.env.STORAGE_BUCKET!;
 const bucket = storage.bucket(bucketName);
 
 // Model constants
-// Using gemini-3-flash for text (faster, smarter successor to 2.0-flash which is deprecated Mar 2026)
-// Using gemini-3-pro-image-preview for images (best text rendering - 94% accuracy)
+// Text: gemini-3-flash-preview
+// Images: gemini-3.1-flash-image-preview ("Nano Banana 2", launched 2026-02-26).
+//   ~90% text accuracy (vs ~94% on gemini-3-pro-image-preview) in exchange for
+//   4-6s per image (vs 24-35s) and ~50% lower cost ($0.067 vs $0.13 per 1K image).
+//   User override of FC-002; full benchmark plan deferred.
 const TEXT_MODEL = 'gemini-3-flash-preview';
-const IMAGE_MODEL = 'gemini-3-pro-image-preview';
+const IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
 
 // Retry configuration for handling 503 Service Unavailable errors
 const MAX_RETRIES = 3;
