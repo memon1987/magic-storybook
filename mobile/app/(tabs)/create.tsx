@@ -20,7 +20,6 @@ import Animated, {
   useAnimatedStyle,
   withRepeat,
   withTiming,
-  withSequence,
   Easing,
   FadeIn,
   FadeOut,
@@ -461,20 +460,11 @@ function GeneratingOverlay() {
   const { palette } = useTheme();
   const [messageIndex, setMessageIndex] = useState(0);
   const rotate = useSharedValue(0);
-  const fakeProgress = useSharedValue(0.05);
-  const [progressTick, setProgressTick] = useState(0.4);
+  const [progressTick, setProgressTick] = useState(0.05);
 
   useEffect(() => {
     rotate.value = withRepeat(
       withTiming(360, { duration: 2400, easing: Easing.linear }),
-      -1,
-      false
-    );
-    fakeProgress.value = withRepeat(
-      withSequence(
-        withTiming(0.85, { duration: 6000, easing: Easing.out(Easing.cubic) }),
-        withTiming(0.05, { duration: 0 })
-      ),
       -1,
       false
     );
@@ -483,13 +473,13 @@ function GeneratingOverlay() {
       2200
     );
     const progressId = setInterval(() => {
-      setProgressTick((p) => (p < 0.85 ? p + 0.05 : 0.05));
+      setProgressTick((p) => p + (0.95 - p) * 0.04);
     }, 1500);
     return () => {
       clearInterval(id);
       clearInterval(progressId);
     };
-  }, [rotate, fakeProgress]);
+  }, [rotate]);
 
   const iconStyle = useAnimatedStyle(() => ({
     transform: [{ rotate: `${rotate.value}deg` }],

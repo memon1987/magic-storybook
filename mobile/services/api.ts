@@ -7,7 +7,7 @@ const API_URL = 'https://storybook-api-983903024759.us-central1.run.app';
 // Create axios instance
 const api: AxiosInstance = axios.create({
   baseURL: API_URL,
-  timeout: 120000, // 2 minutes for story generation
+  timeout: 300000, // 5 minutes — story + 4-12 illustrations + 503 retries
   headers: {
     'Content-Type': 'application/json',
   },
