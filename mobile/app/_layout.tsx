@@ -61,14 +61,6 @@ function RootLayoutNav() {
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen
-          name="story/[id]/preview"
-          options={{
-            headerShown: true,
-            title: 'Story Preview',
-            presentation: 'modal',
-          }}
-        />
-        <Stack.Screen
           name="story/[id]/read"
           options={{
             headerShown: false,

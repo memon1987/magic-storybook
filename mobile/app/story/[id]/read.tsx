@@ -1,27 +1,46 @@
-import { useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
-  FlatList,
-  ActivityIndicator,
-  SafeAreaView,
+  Pressable,
   useWindowDimensions,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
+import * as ScreenOrientation from 'expo-screen-orientation';
+import PagerView from 'react-native-pager-view';
+import ConfettiCannon from 'react-native-confetti-cannon';
+import Animated, {
+  FadeIn,
+  FadeOut,
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+} from 'react-native-reanimated';
 import { getStory, StoryPage } from '../../../services/api';
-import { Colors } from '../../../constants/Colors';
+import { useTheme } from '../../../contexts/ThemeContext';
+import { GradientBackground } from '../../../components/GradientBackground';
+import { AnimatedPressable } from '../../../components/AnimatedPressable';
+import { SplashScreenAnimated } from '../../../components/SplashScreenAnimated';
+
+const CONTROLS_TIMEOUT_MS = 4000;
 
 export default function ReadScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const flatListRef = useRef<FlatList>(null);
+  const { palette } = useTheme();
+  const { width, height } = useWindowDimensions();
+
   const [currentPage, setCurrentPage] = useState(0);
-  const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const [orientation, setOrientation] = useState<ScreenOrientation.Orientation | null>(null);
+  const pagerRef = useRef<PagerView>(null);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const confettiFiredFor = useRef<number | null>(null);
+  const confettiRef = useRef<ConfettiCannon | null>(null);
 
   const { data: story, isLoading, error } = useQuery({
     queryKey: ['story', id],
@@ -29,137 +48,234 @@ export default function ReadScreen() {
     enabled: !!id,
   });
 
-  const pages = story?.pages || [];
+  const pages: StoryPage[] = story?.pages ?? [];
+  const isLastPage = pages.length > 0 && currentPage === pages.length - 1;
+  const isPortrait = orientation === ScreenOrientation.Orientation.PORTRAIT_UP
+    || orientation === ScreenOrientation.Orientation.PORTRAIT_DOWN
+    || height > width;
 
-  const handleScroll = (event: any) => {
-    const offsetX = event.nativeEvent.contentOffset.x;
-    const pageIndex = Math.round(offsetX / SCREEN_WIDTH);
-    setCurrentPage(pageIndex);
-  };
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+      } catch {
+        // ignore — some devices/simulators reject the lock
+      }
+      const initial = await ScreenOrientation.getOrientationAsync();
+      if (!cancelled) setOrientation(initial);
+    })();
+
+    const sub = ScreenOrientation.addOrientationChangeListener((evt) => {
+      setOrientation(evt.orientationInfo.orientation);
+    });
+
+    return () => {
+      cancelled = true;
+      ScreenOrientation.removeOrientationChangeListener(sub);
+      ScreenOrientation.unlockAsync().catch(() => {});
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!controlsVisible) return;
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => setControlsVisible(false), CONTROLS_TIMEOUT_MS);
+    return () => {
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+    };
+  }, [controlsVisible, currentPage]);
+
+  useEffect(() => {
+    if (isLastPage && confettiFiredFor.current !== currentPage) {
+      confettiFiredFor.current = currentPage;
+      confettiRef.current?.start();
+    }
+  }, [isLastPage, currentPage]);
 
   const goToPage = (index: number) => {
-    if (index >= 0 && index < pages.length) {
-      flatListRef.current?.scrollToIndex({ index, animated: true });
-    }
+    if (index < 0 || index >= pages.length) return;
+    pagerRef.current?.setPage(index);
+    setCurrentPage(index);
+    setControlsVisible(true);
   };
 
-  const handlePrevious = () => goToPage(currentPage - 1);
-  const handleNext = () => goToPage(currentPage + 1);
+  const handleTap = (zone: 'left' | 'center' | 'right') => {
+    if (zone === 'left') goToPage(currentPage - 1);
+    else if (zone === 'right') goToPage(currentPage + 1);
+    else setControlsVisible((v) => !v);
+  };
 
-  // Full-page image rendering - text is embedded in the illustration
-  const renderPage = ({ item }: { item: StoryPage }) => (
-    <View style={{
-      width: SCREEN_WIDTH,
-      height: SCREEN_HEIGHT,
-      justifyContent: 'center',
-      alignItems: 'center',
-      backgroundColor: '#000000',
-    }}>
-      <Image
-        source={{ uri: item.imageUrl }}
-        style={{ width: SCREEN_WIDTH, height: SCREEN_HEIGHT }}
-        contentFit="contain"
-      />
-    </View>
-  );
-
-  if (isLoading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={Colors.light.accent} />
-      </View>
-    );
+  if (isLoading || !id) {
+    return <SplashScreenAnimated loadingText="Opening your story…" progress={0.3} />;
   }
 
   if (error || !story) {
     return (
-      <SafeAreaView style={styles.errorContainer}>
-        <Ionicons name="alert-circle" size={48} color={Colors.light.error} />
-        <Text style={styles.errorText}>Failed to load story</Text>
-        <TouchableOpacity style={styles.closeButton} onPress={() => router.back()}>
-          <Text style={styles.closeButtonText}>Go Back</Text>
-        </TouchableOpacity>
-      </SafeAreaView>
+      <GradientBackground colors={[palette.colors.background, palette.colors.secondary]}>
+        <View style={styles.errorWrap}>
+          <Ionicons name="alert-circle" size={48} color={palette.colors.accent} />
+          <Text style={[styles.errorText, { color: palette.colors.textDark }]}>
+            Failed to load story
+          </Text>
+          <AnimatedPressable
+            onPress={() => router.back()}
+            style={[styles.errorButton, { backgroundColor: palette.colors.accent }]}
+          >
+            <Text style={styles.errorButtonText}>Go Back</Text>
+          </AnimatedPressable>
+        </View>
+      </GradientBackground>
+    );
+  }
+
+  if (isPortrait) {
+    return (
+      <View style={styles.portraitOverlay}>
+        <Ionicons name="phone-landscape" size={64} color="#FFFFFF" />
+        <Text style={styles.portraitTitle}>Rotate your device</Text>
+        <Text style={styles.portraitSubtitle}>
+          Stories read best in landscape mode.
+        </Text>
+        <Pressable onPress={() => router.back()} style={styles.portraitCloseButton}>
+          <Ionicons name="close" size={20} color="#FFFFFF" />
+          <Text style={styles.portraitCloseText}>Close</Text>
+        </Pressable>
+      </View>
     );
   }
 
   return (
     <View style={styles.container}>
-      {/* Header - semi-transparent overlay */}
-      <SafeAreaView style={styles.header}>
-        <TouchableOpacity style={styles.headerButton} onPress={() => router.back()}>
-          <Ionicons name="close" size={28} color="#FFFFFF" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          {story.title}
-        </Text>
-        <View style={styles.headerButton} />
-      </SafeAreaView>
+      <PagerView
+        ref={pagerRef}
+        style={styles.pager}
+        initialPage={0}
+        onPageSelected={(e) => {
+          setCurrentPage(e.nativeEvent.position);
+          setControlsVisible(true);
+        }}
+      >
+        {pages.map((page, idx) => (
+          <View key={`page-${idx}`} style={styles.pageWrap}>
+            <Image
+              source={{ uri: page.imageUrl }}
+              style={styles.pageImage}
+              contentFit="contain"
+            />
+          </View>
+        ))}
+      </PagerView>
 
-      {/* Full-page images with embedded text */}
-      <FlatList
-        key={`${SCREEN_WIDTH}-${SCREEN_HEIGHT}`}
-        ref={flatListRef}
-        data={pages}
-        renderItem={renderPage}
-        keyExtractor={(item, index) => `page-${index}`}
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        onScroll={handleScroll}
-        scrollEventThrottle={16}
-        initialScrollIndex={currentPage}
-        getItemLayout={(data, index) => ({
-          length: SCREEN_WIDTH,
-          offset: SCREEN_WIDTH * index,
-          index,
-        })}
-      />
+      <Pressable style={[styles.tapZone, styles.tapLeft]} onPress={() => handleTap('left')} />
+      <Pressable style={[styles.tapZone, styles.tapCenter]} onPress={() => handleTap('center')} />
+      <Pressable style={[styles.tapZone, styles.tapRight]} onPress={() => handleTap('right')} />
 
-      {/* Navigation Controls - semi-transparent overlay */}
-      <SafeAreaView style={styles.footer}>
-        <TouchableOpacity
-          style={[styles.navButton, currentPage === 0 && styles.navButtonDisabled]}
-          onPress={handlePrevious}
-          disabled={currentPage === 0}
+      {controlsVisible && (
+        <Animated.View
+          entering={FadeIn.duration(200)}
+          exiting={FadeOut.duration(200)}
+          style={styles.topBar}
+          pointerEvents="box-none"
         >
-          <Ionicons
-            name="chevron-back"
-            size={24}
-            color={currentPage === 0 ? 'rgba(255,255,255,0.3)' : '#FFFFFF'}
-          />
-        </TouchableOpacity>
+          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.closeIconButton}>
+            <Ionicons name="close" size={26} color="#FFFFFF" />
+          </Pressable>
+          <Text style={styles.headerTitle} numberOfLines={1}>
+            {story.title}
+          </Text>
+          <View style={styles.closeIconButton} />
+        </Animated.View>
+      )}
 
-        <View style={styles.pageIndicator}>
-          <Text style={styles.pageIndicatorText}>
+      {controlsVisible && (
+        <Animated.View
+          entering={FadeIn.duration(200)}
+          exiting={FadeOut.duration(200)}
+          style={styles.bottomBar}
+          pointerEvents="box-none"
+        >
+          <View style={styles.dotsRow}>
+            {pages.map((_, idx) => (
+              <PageDot
+                key={idx}
+                index={idx}
+                active={idx === currentPage}
+                color={palette.colors.accent}
+                onPress={() => goToPage(idx)}
+              />
+            ))}
+          </View>
+          <Text style={styles.pageCounter}>
             {currentPage + 1} / {pages.length}
           </Text>
-        </View>
+        </Animated.View>
+      )}
 
-        <TouchableOpacity
-          style={[styles.navButton, currentPage === pages.length - 1 && styles.navButtonDisabled]}
-          onPress={handleNext}
-          disabled={currentPage === pages.length - 1}
+      <ConfettiCannon
+        ref={(r) => {
+          confettiRef.current = r;
+        }}
+        count={120}
+        origin={{ x: width / 2, y: 0 }}
+        autoStart={false}
+        fadeOut
+        explosionSpeed={350}
+        fallSpeed={2800}
+      />
+
+      {isLastPage && (
+        <Animated.View
+          entering={FadeIn.delay(600).duration(400)}
+          style={styles.endOverlay}
+          pointerEvents="box-none"
         >
-          <Ionicons
-            name="chevron-forward"
-            size={24}
-            color={currentPage === pages.length - 1 ? 'rgba(255,255,255,0.3)' : '#FFFFFF'}
-          />
-        </TouchableOpacity>
-      </SafeAreaView>
-
-      {/* Page Dots */}
-      <View style={styles.dotsContainer}>
-        {pages.map((_, index) => (
-          <TouchableOpacity
-            key={index}
-            style={[styles.dot, currentPage === index && styles.dotActive]}
-            onPress={() => goToPage(index)}
-          />
-        ))}
-      </View>
+          <View style={[styles.endCard, { backgroundColor: palette.colors.cardBg }]}>
+            <Text style={[styles.endTitle, { color: palette.colors.textDark }]}>The End</Text>
+            <Text style={[styles.endSubtitle, { color: palette.colors.textMuted }]}>
+              Hope you enjoyed {story.title}
+            </Text>
+            <AnimatedPressable
+              onPress={() => router.replace('/(tabs)')}
+              style={[styles.endButton, { backgroundColor: palette.colors.accent }]}
+            >
+              <Ionicons name="library" size={18} color="#FFFFFF" />
+              <Text style={styles.endButtonText}>Back to Library</Text>
+            </AnimatedPressable>
+          </View>
+        </Animated.View>
+      )}
     </View>
+  );
+}
+
+interface PageDotProps {
+  index: number;
+  active: boolean;
+  color: string;
+  onPress: () => void;
+}
+
+function PageDot({ active, color, onPress }: PageDotProps) {
+  const w = useSharedValue(active ? 22 : 8);
+  useEffect(() => {
+    w.value = withSpring(active ? 22 : 8, { damping: 18, stiffness: 220 });
+  }, [active, w]);
+
+  const style = useAnimatedStyle(() => ({
+    width: w.value,
+  }));
+
+  return (
+    <Pressable onPress={onPress} hitSlop={6}>
+      <Animated.View
+        style={[
+          styles.dot,
+          style,
+          { backgroundColor: active ? color : 'rgba(255,255,255,0.4)' },
+        ]}
+      />
+    </Pressable>
   );
 }
 
@@ -168,115 +284,183 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000000',
   },
-  loadingContainer: {
+  pager: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Colors.light.background,
   },
-  errorContainer: {
+  pageWrap: {
     flex: 1,
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Colors.light.background,
-    padding: 20,
+    backgroundColor: '#000000',
   },
-  errorText: {
-    fontSize: 18,
-    fontFamily: 'Quicksand_500Medium',
-    color: Colors.light.text,
-    marginTop: 12,
+  pageImage: {
+    width: '100%',
+    height: '100%',
   },
-  closeButton: {
-    marginTop: 20,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    backgroundColor: Colors.light.primary,
-    borderRadius: 8,
+  tapZone: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
   },
-  closeButtonText: {
-    color: Colors.light.textOnPrimary,
-    fontSize: 16,
-    fontFamily: 'Nunito_600SemiBold',
+  tapLeft: {
+    left: 0,
+    width: '25%',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+  tapCenter: {
+    left: '25%',
+    width: '50%',
+  },
+  tapRight: {
+    right: 0,
+    width: '25%',
+  },
+  topBar: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    zIndex: 10,
-  },
-  headerButton: {
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
+    flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    paddingBottom: 12,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  closeIconButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   headerTitle: {
     flex: 1,
-    fontSize: 18,
     fontFamily: 'Nunito_700Bold',
+    fontSize: 16,
     color: '#FFFFFF',
     textAlign: 'center',
-    marginHorizontal: 8,
   },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+  bottomBar: {
     position: 'absolute',
-    bottom: 40,
+    bottom: 0,
     left: 0,
     right: 0,
-  },
-  navButton: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: Colors.light.accent,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  navButtonDisabled: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-  },
-  pageIndicator: {
     paddingHorizontal: 20,
-    paddingVertical: 8,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-  },
-  pageIndicatorText: {
-    fontSize: 16,
-    fontFamily: 'Nunito_600SemiBold',
-    color: '#FFFFFF',
-  },
-  dotsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    position: 'absolute',
-    bottom: 20,
-    left: 0,
-    right: 0,
+    paddingTop: 12,
+    paddingBottom: 16,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
     gap: 8,
   },
+  dotsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   dot: {
-    width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: 'rgba(255,255,255,0.3)',
   },
-  dotActive: {
-    backgroundColor: Colors.light.accent,
-    width: 24,
+  pageCounter: {
+    fontFamily: 'Quicksand_600SemiBold',
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.85)',
+  },
+  endOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+  },
+  endCard: {
+    width: '70%',
+    maxWidth: 420,
+    padding: 28,
+    borderRadius: 24,
+    alignItems: 'center',
+    gap: 8,
+  },
+  endTitle: {
+    fontFamily: 'Baloo2_700Bold',
+    fontSize: 32,
+  },
+  endSubtitle: {
+    fontFamily: 'Quicksand_500Medium',
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  endButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 22,
+    height: 52,
+    borderRadius: 999,
+  },
+  endButtonText: {
+    fontFamily: 'Nunito_700Bold',
+    fontSize: 15,
+    color: '#FFFFFF',
+  },
+  errorWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+    gap: 12,
+  },
+  errorText: {
+    fontFamily: 'Nunito_700Bold',
+    fontSize: 18,
+    textAlign: 'center',
+  },
+  errorButton: {
+    marginTop: 8,
+    paddingHorizontal: 22,
+    height: 48,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  errorButtonText: {
+    color: '#FFFFFF',
+    fontFamily: 'Nunito_700Bold',
+    fontSize: 15,
+  },
+  portraitOverlay: {
+    flex: 1,
+    backgroundColor: '#000000',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+    gap: 12,
+  },
+  portraitTitle: {
+    fontFamily: 'Baloo2_700Bold',
+    fontSize: 22,
+    color: '#FFFFFF',
+    marginTop: 8,
+  },
+  portraitSubtitle: {
+    fontFamily: 'Quicksand_500Medium',
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.7)',
+    textAlign: 'center',
+  },
+  portraitCloseButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 18,
+    height: 44,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    marginTop: 16,
+  },
+  portraitCloseText: {
+    fontFamily: 'Nunito_600SemiBold',
+    fontSize: 14,
+    color: '#FFFFFF',
   },
 });
