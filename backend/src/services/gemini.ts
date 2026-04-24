@@ -141,12 +141,6 @@ export async function generateStory(input: StoryInput): Promise<GeneratedStory> 
 }
 
 /**
- * Generate an illustration using Gemini 3 Pro Image (Nano Banana Pro)
- * Uses generateContent API with IMAGE response modality for best text rendering
- * Achieves ~94% text accuracy vs ~70% with Imagen 4
- * Includes retry logic for handling 503 Service Unavailable errors
- */
-/**
  * Result from illustration generation, includes raw image data for reference use
  */
 interface IllustrationResult {

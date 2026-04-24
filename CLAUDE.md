@@ -65,8 +65,8 @@ After implementation is complete, update the plan file:
 - **Storage**: Google Cloud Storage (for illustration images)
 - **Auth**: Firebase Authentication (email/password)
 - **AI Models**:
-  - Text Generation: `gemini-2.0-flash`
-  - Image Generation: `gemini-3-pro-image-preview` (94% text accuracy)
+  - Text Generation: `gemini-3-flash-preview`
+  - Image Generation: `gemini-3.1-flash-image-preview` ("Nano Banana 2", ~90% text accuracy, 4-6s/image)
 
 ---
 
@@ -81,7 +81,7 @@ ai_storybook_app/
 │   │   │   ├── auth.ts        # POST /api/auth/register, /api/auth/login
 │   │   │   └── stories.ts     # POST /api/stories/generate, GET /api/stories, GET /api/stories/:id
 │   │   ├── services/
-│   │   │   ├── gemini.ts      # AI generation (Gemini 3 Pro Image)
+│   │   │   ├── gemini.ts      # AI generation (Gemini 3.1 Flash Image)
 │   │   │   └── firebase.ts    # Firebase Admin SDK init
 │   │   ├── middleware/
 │   │   │   └── auth.ts        # Firebase ID token verification
@@ -171,8 +171,8 @@ Defined in:
 ### Current Models (in `backend/src/services/gemini.ts`)
 
 ```typescript
-const TEXT_MODEL = 'gemini-2.0-flash';           // Story text generation
-const IMAGE_MODEL = 'gemini-3-pro-image-preview'; // Image generation (94% text accuracy)
+const TEXT_MODEL = 'gemini-3-flash-preview';            // Story text generation
+const IMAGE_MODEL = 'gemini-3.1-flash-image-preview';   // Image generation (~90% text accuracy, 4-6s/image)
 ```
 
 ### Image Generation Pattern
@@ -350,7 +350,7 @@ eas build --platform android
 
 ### 1. 503 Service Unavailable (Image Generation)
 
-**Cause**: Gemini 3 Pro Image experiencing high demand
+**Cause**: Gemini 3.1 Flash Image experiencing high demand
 
 **Solution**: Retry logic with exponential backoff implemented in `gemini.ts`
 
@@ -358,11 +358,10 @@ eas build --platform android
 
 ### 2. Text Rendering Accuracy
 
-**Previous Issue**: Imagen 4 had ~70% text accuracy (nonsensical text in images)
-
-**Solution**: Switched to `gemini-3-pro-image-preview` with ~94% accuracy
-
-**Cost Impact**: ~3x higher per image ($0.13-0.24 vs $0.04)
+**History**:
+- Imagen 4 had ~70% text accuracy (nonsensical text in images) — abandoned
+- `gemini-3-pro-image-preview` ("Nano Banana Pro") gave ~94% accuracy at ~$0.13/image but 24-35s/image latency
+- Currently on `gemini-3.1-flash-image-preview` ("Nano Banana 2"): ~90% accuracy, 4-6s/image, ~$0.067/image — chose speed over the last 4% of accuracy. Revert IMAGE_MODEL constant if accuracy drops are unacceptable on real stories.
 
 ### 3. Port Conflicts (Development)
 
@@ -379,7 +378,7 @@ kill -9 <PID>  # Or use existing server
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Story text generation | ✅ Complete | Gemini 2.0 Flash |
-| Image generation | ✅ Complete | Gemini 3 Pro Image |
+| Image generation | ✅ Complete | Gemini 3.1 Flash Image |
 | Text in images | ✅ Complete | Dr. Seuss/Pout-Pout style |
 | 6 art styles | ✅ Complete | All working |
 | V2 color palette | ✅ Complete | Cream/yellow/coral theme |
@@ -418,7 +417,7 @@ gcloud run services logs read storybook-api --region us-central1 --limit 50
 
 ### 1. Image Generation Response Format
 
-Gemini 3 Pro Image returns images in this structure:
+Gemini 3.1 Flash Image returns images in this structure:
 ```typescript
 response.candidates[0].content.parts[0].inlineData = {
   data: string;      // Base64 encoded image
@@ -449,7 +448,7 @@ req.user = { uid: decodedToken.uid, email: decodedToken.email };
 
 1. User submits form → `POST /api/stories/generate`
 2. Backend generates story text with Gemini 2.0 Flash
-3. For each page, generates illustration with Gemini 3 Pro Image
+3. For each page, generates illustration with Gemini 3.1 Flash Image
 4. Images uploaded to Cloud Storage
 5. Story document saved to Firestore
 6. Response returned with full story data
