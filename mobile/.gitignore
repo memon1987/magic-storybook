@@ -30,6 +30,9 @@ DerivedData
 *.hmap
 *.ipa
 *.xcuserstate
+# CNG generated — do not commit (regenerated on every prebuild)
+/ios/
+/android/
 ios/.xcode.env.local
 ios/Pods/
 

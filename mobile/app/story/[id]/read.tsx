@@ -6,12 +6,10 @@ import {
   Pressable,
   useWindowDimensions,
 } from 'react-native';
-import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import PagerView from 'react-native-pager-view';
 import ConfettiCannon from 'react-native-confetti-cannon';
 import Animated, {
   FadeIn,
@@ -25,6 +23,8 @@ import { useTheme } from '../../../contexts/ThemeContext';
 import { GradientBackground } from '../../../components/GradientBackground';
 import { AnimatedPressable } from '../../../components/AnimatedPressable';
 import { SplashScreenAnimated } from '../../../components/SplashScreenAnimated';
+import { Curl, type TapZone } from '../../../components/PageCurl/Curl';
+import { usePageImages } from '../../../components/PageCurl/usePageImages';
 
 const CONTROLS_TIMEOUT_MS = 4000;
 
@@ -37,7 +37,6 @@ export default function ReadScreen() {
   const [currentPage, setCurrentPage] = useState(0);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [orientation, setOrientation] = useState<ScreenOrientation.Orientation | null>(null);
-  const pagerRef = useRef<PagerView>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const confettiFiredFor = useRef<number | null>(null);
   const confettiRef = useRef<ConfettiCannon | null>(null);
@@ -54,13 +53,15 @@ export default function ReadScreen() {
     || orientation === ScreenOrientation.Orientation.PORTRAIT_DOWN
     || height > width;
 
+  const pageImages = usePageImages(pages, currentPage);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
       } catch {
-        // ignore — some devices/simulators reject the lock
+        // some devices/simulators reject the lock
       }
       const initial = await ScreenOrientation.getOrientationAsync();
       if (!cancelled) setOrientation(initial);
@@ -95,15 +96,23 @@ export default function ReadScreen() {
 
   const goToPage = (index: number) => {
     if (index < 0 || index >= pages.length) return;
-    pagerRef.current?.setPage(index);
     setCurrentPage(index);
     setControlsVisible(true);
   };
 
-  const handleTap = (zone: 'left' | 'center' | 'right') => {
-    if (zone === 'left') goToPage(currentPage - 1);
-    else if (zone === 'right') goToPage(currentPage + 1);
-    else setControlsVisible((v) => !v);
+  const handleTap = (zone: TapZone) => {
+    if (zone === 'left') {
+      goToPage(currentPage - 1);
+    } else if (zone === 'right') {
+      goToPage(currentPage + 1);
+    } else {
+      setControlsVisible((v) => !v);
+    }
+  };
+
+  const handlePageChange = (newPage: number) => {
+    setCurrentPage(newPage);
+    setControlsVisible(true);
   };
 
   if (isLoading || !id) {
@@ -147,29 +156,16 @@ export default function ReadScreen() {
 
   return (
     <View style={styles.container}>
-      <PagerView
-        ref={pagerRef}
-        style={styles.pager}
-        initialPage={0}
-        onPageSelected={(e) => {
-          setCurrentPage(e.nativeEvent.position);
-          setControlsVisible(true);
-        }}
-      >
-        {pages.map((page, idx) => (
-          <View key={`page-${idx}`} style={styles.pageWrap}>
-            <Image
-              source={{ uri: page.imageUrl }}
-              style={styles.pageImage}
-              contentFit="contain"
-            />
-          </View>
-        ))}
-      </PagerView>
-
-      <Pressable style={[styles.tapZone, styles.tapLeft]} onPress={() => handleTap('left')} />
-      <Pressable style={[styles.tapZone, styles.tapCenter]} onPress={() => handleTap('center')} />
-      <Pressable style={[styles.tapZone, styles.tapRight]} onPress={() => handleTap('right')} />
+      <Curl
+        width={width}
+        height={height}
+        currentImage={pageImages.current}
+        nextImage={pageImages.next}
+        currentPage={currentPage}
+        totalPages={pages.length}
+        onPageChange={handlePageChange}
+        onTap={handleTap}
+      />
 
       {controlsVisible && (
         <Animated.View
@@ -283,36 +279,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000000',
-  },
-  pager: {
-    flex: 1,
-  },
-  pageWrap: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#000000',
-  },
-  pageImage: {
-    width: '100%',
-    height: '100%',
-  },
-  tapZone: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-  },
-  tapLeft: {
-    left: 0,
-    width: '25%',
-  },
-  tapCenter: {
-    left: '25%',
-    width: '50%',
-  },
-  tapRight: {
-    right: 0,
-    width: '25%',
   },
   topBar: {
     position: 'absolute',

@@ -1,6 +1,7 @@
 import { useEffect, useCallback } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from '../contexts/ThemeContext';
 import { useAuth } from '../hooks/useAuth';
@@ -97,14 +98,16 @@ export default function RootLayout() {
   }, [onLayoutRootView]);
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        {fontsLoaded ? (
-          <RootLayoutNav />
-        ) : (
-          <SplashScreenAnimated loadingText="Loading…" progress={0.4} />
-        )}
-      </ThemeProvider>
-    </QueryClientProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider>
+          {fontsLoaded ? (
+            <RootLayoutNav />
+          ) : (
+            <SplashScreenAnimated loadingText="Loading…" progress={0.4} />
+          )}
+        </ThemeProvider>
+      </QueryClientProvider>
+    </GestureHandlerRootView>
   );
 }
