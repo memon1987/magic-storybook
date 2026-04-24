@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colorPalettes, defaultPaletteId, ColorPalette } from '../constants/ColorPalettes';
 
@@ -32,11 +32,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const palette = colorPalettes.find((p) => p.id === paletteId) ?? colorPalettes[0];
 
-  return (
-    <ThemeContext.Provider value={{ palette, paletteId, setPalette, palettes: colorPalettes }}>
-      {children}
-    </ThemeContext.Provider>
+  const value = useMemo(
+    () => ({ palette, paletteId, setPalette, palettes: colorPalettes }),
+    [palette, paletteId, setPalette]
   );
+
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 
 export function useTheme(): ThemeContextValue {

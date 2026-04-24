@@ -39,20 +39,6 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ## Active Considerations
 
-### FC-001: Frontend redesign (Figma v2)
-
-**Status:** Plan published
-**Size estimate:** L
-**Owner:** Zeshan
-**Plan file:** `docs/plans/fc-001.md`
-
-**Problem / opportunity:** Current mobile UI is functional but basic. A complete redesign was done in Figma Make with 6 switchable color palettes, Typeform-style story creation wizard, animated splash screen, custom tab bar, and landscape story reader. Need to rebuild all screens to match.
-
-**Open questions:**
-- None — plan is published.
-
----
-
 ### FC-002: Image model cost optimization
 
 **Status:** Consideration
@@ -213,4 +199,9 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ## Completed
 
-_Move completed FC entries here with links to plan + PR._
+### FC-001: Frontend redesign (Figma v2) — Done 2026-04-24
+
+Complete rewrite of all mobile screens to match the v2 Figma designs. Introduced 6 switchable color palettes with AsyncStorage persistence, custom tab bar, animated splash, Typeform-style 6-step create wizard, reskinned library / settings / auth screens, and a landscape story reader.
+
+- **Plan:** [docs/plans/fc-001.md](plans/fc-001.md)
+- **PR:** [#1](https://github.com/memon1987/ai-storybook-app/pull/1) (squash-merged as `669a7bc`)
