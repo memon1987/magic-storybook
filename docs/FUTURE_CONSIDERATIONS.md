@@ -122,16 +122,15 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ### FC-008: Security hardening
 
-**Status:** Consideration
-**Size estimate:** S
-**Owner:** unassigned
-**Plan file:** not yet
+**Status:** Executing
+**Size estimate:** S→M (see plan note)
+**Owner:** Zeshan
+**Plan file:** `docs/plans/fc-008.md` (published retroactively)
 
 **Problem / opportunity:** Firebase client config and API URL are hardcoded in source. Should use environment variables / build-time config.
 
 **Open questions:**
-- Use `app.config.js` with `EXPO_PUBLIC_*` env vars?
-- Any other secrets to audit?
+- None — plan is published.
 
 ---
 
