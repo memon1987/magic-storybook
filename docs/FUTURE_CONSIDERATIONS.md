@@ -39,22 +39,6 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ## Active Considerations
 
-### FC-002: Image model cost optimization
-
-**Status:** Consideration
-**Size estimate:** M
-**Owner:** unassigned
-**Plan file:** not yet
-
-**Problem / opportunity:** Currently using `gemini-3-pro-image-preview` at ~$0.13/image. `gemini-3.1-flash-image-preview` costs $0.045/image (66% savings) and Imagen 4 Standard costs $0.04/image. Need to benchmark text-in-image accuracy before switching.
-
-**Open questions:**
-- Does `gemini-3.1-flash-image-preview` maintain 90%+ text rendering accuracy for Dr. Seuss style embedded text?
-- Can we use Imagen 4 for pages with minimal text and Gemini 3 Pro for text-heavy pages (hybrid approach)?
-- What's the latency difference between models?
-
----
-
 ### FC-003: Text-to-speech narration
 
 **Status:** Consideration
@@ -198,3 +182,11 @@ Replaced `react-native-pager-view` with a Skia + Reanimated page curl ported fro
 
 - **Plan:** [docs/plans/fc-011.md](plans/fc-011.md)
 - **PR:** [#3](https://github.com/memon1987/ai-storybook-app/pull/3) (squash-merged as `53e4832`)
+
+### FC-002: Image model cost optimization — Done 2026-04-28
+
+Swapped `gemini-3-pro-image-preview` → `gemini-3.1-flash-image-preview` ("Nano Banana 2") on 2026-04-24 via no-plan override (`13ba5d7`). Trades ~4 points of text-in-image accuracy (94% → ~90%) for ~50% cost reduction (~$0.13 → ~$0.067 per image). Real-world latency is more variable than spec — see investigation report for the data and the keep-vs-revert reasoning.
+
+- **Investigation:** [docs/investigations/fc-002-latency-benchmark-2026-04-28.md](investigations/fc-002-latency-benchmark-2026-04-28.md)
+- **Commit:** `13ba5d7`
+- **Outcome:** keep Flash; revisit if 3 of next 5 stories show > 60s avg per-page latency.

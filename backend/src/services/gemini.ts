@@ -173,7 +173,7 @@ export async function generateIllustration(
 
   contents.push({ text: promptText });
 
-  console.log(`Generating illustration for page ${pageNumber} with Gemini 3 Pro Image${referenceImageBase64 ? ' (with page 1 reference)' : ''}...`);
+  console.log(`Generating illustration for page ${pageNumber} with ${IMAGE_MODEL}${referenceImageBase64 ? ' (with page 1 reference)' : ''}...`);
   const startTime = Date.now();
 
   let lastError: unknown = null;
