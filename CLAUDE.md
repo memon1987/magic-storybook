@@ -273,14 +273,22 @@ STORAGE_BUCKET=           # GCS bucket name (e.g., storybook-assets)
 PORT=8080                 # Cloud Run default
 ```
 
-### Mobile (`.env` / app.config.js)
+### Mobile (`mobile/.env`)
+
+Required by `services/firebase.ts` and `services/api.ts` — module-load throws if any are missing. Copy `mobile/.env.example` and populate.
 
 ```bash
 EXPO_PUBLIC_API_URL=https://storybook-api-XXXXX.us-central1.run.app
+
 EXPO_PUBLIC_FIREBASE_API_KEY=
 EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=
 EXPO_PUBLIC_FIREBASE_PROJECT_ID=
+EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET=
+EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
+EXPO_PUBLIC_FIREBASE_APP_ID=
 ```
+
+`EXPO_PUBLIC_*` vars are inlined into the JS bundle at build time. Firebase web API keys are not cryptographic secrets — Firestore Security Rules are what enforces auth — so committing them in a previous version of this repo wasn't a security incident. We externalized them anyway so staging vs prod configs are easy to swap.
 
 ---
 

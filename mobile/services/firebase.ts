@@ -8,14 +8,23 @@ import {
   User,
 } from 'firebase/auth';
 
-// Firebase configuration
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `Missing ${name}. Copy mobile/.env.example to mobile/.env and populate before running the app.`
+    );
+  }
+  return value;
+}
+
 const firebaseConfig = {
-  apiKey: 'AIzaSyBEOhJTwkJ1R5zjKc73ekUGs55a4Sog_98',
-  authDomain: 'ai-storybook-app-2025.firebaseapp.com',
-  projectId: 'ai-storybook-app-2025',
-  storageBucket: 'ai-storybook-app-2025.firebasestorage.app',
-  messagingSenderId: '983903024759',
-  appId: '1:983903024759:ios:8659dfeaebb3ad54923872',
+  apiKey: requireEnv('EXPO_PUBLIC_FIREBASE_API_KEY'),
+  authDomain: requireEnv('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN'),
+  projectId: requireEnv('EXPO_PUBLIC_FIREBASE_PROJECT_ID'),
+  storageBucket: requireEnv('EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET'),
+  messagingSenderId: requireEnv('EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID'),
+  appId: requireEnv('EXPO_PUBLIC_FIREBASE_APP_ID'),
 };
 
 // Initialize Firebase (only once)
