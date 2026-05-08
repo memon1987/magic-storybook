@@ -8,23 +8,50 @@ import {
   User,
 } from 'firebase/auth';
 
-function requireEnv(name: string): string {
-  const value = process.env[name];
-  if (!value) {
+const PLACEHOLDER_PATTERN = /^(your-|XXXX|0000)/;
+
+function readRequired(names: readonly string[]): Record<string, string> {
+  const missing: string[] = [];
+  const placeholder: string[] = [];
+  const values: Record<string, string> = {};
+  for (const name of names) {
+    const v = process.env[name];
+    if (!v) {
+      missing.push(name);
+    } else if (PLACEHOLDER_PATTERN.test(v)) {
+      placeholder.push(name);
+    } else {
+      values[name] = v;
+    }
+  }
+  if (missing.length > 0 || placeholder.length > 0) {
+    const parts: string[] = [];
+    if (missing.length) parts.push(`Missing: ${missing.join(', ')}`);
+    if (placeholder.length) parts.push(`Still set to placeholder values: ${placeholder.join(', ')}`);
     throw new Error(
-      `Missing ${name}. Copy mobile/.env.example to mobile/.env and populate before running the app.`
+      `${parts.join('; ')}. Copy mobile/.env.example to mobile/.env and populate with real values.`
     );
   }
-  return value;
+  return values;
 }
 
+const FIREBASE_VARS = [
+  'EXPO_PUBLIC_FIREBASE_API_KEY',
+  'EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN',
+  'EXPO_PUBLIC_FIREBASE_PROJECT_ID',
+  'EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET',
+  'EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID',
+  'EXPO_PUBLIC_FIREBASE_APP_ID',
+] as const;
+
+const env = readRequired(FIREBASE_VARS);
 const firebaseConfig = {
-  apiKey: requireEnv('EXPO_PUBLIC_FIREBASE_API_KEY'),
-  authDomain: requireEnv('EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN'),
-  projectId: requireEnv('EXPO_PUBLIC_FIREBASE_PROJECT_ID'),
-  storageBucket: requireEnv('EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET'),
-  messagingSenderId: requireEnv('EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID'),
-  appId: requireEnv('EXPO_PUBLIC_FIREBASE_APP_ID'),
+  apiKey: env.EXPO_PUBLIC_FIREBASE_API_KEY,
+  authDomain: env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: env.EXPO_PUBLIC_FIREBASE_APP_ID,
 };
 
 // Initialize Firebase (only once)

@@ -2,9 +2,9 @@ import axios, { AxiosInstance } from 'axios';
 import { getIdToken } from './firebase';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
-if (!API_URL) {
+if (!API_URL || /XXXX/.test(API_URL)) {
   throw new Error(
-    'Missing EXPO_PUBLIC_API_URL. Copy mobile/.env.example to mobile/.env and populate before running the app.'
+    'EXPO_PUBLIC_API_URL is missing or still set to a placeholder. Copy mobile/.env.example to mobile/.env and populate with the real Cloud Run URL.'
   );
 }
 

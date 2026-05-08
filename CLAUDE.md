@@ -288,7 +288,9 @@ EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
 EXPO_PUBLIC_FIREBASE_APP_ID=
 ```
 
-`EXPO_PUBLIC_*` vars are inlined into the JS bundle at build time. Firebase web API keys are not cryptographic secrets — Firestore Security Rules are what enforces auth — so committing them in a previous version of this repo wasn't a security incident. We externalized them anyway so staging vs prod configs are easy to swap.
+`EXPO_PUBLIC_*` vars are inlined into the JS bundle at build time. **Anything you put under this prefix ends up as plaintext in the production app binary** — fine for Firebase web API keys (designed-public; Firestore Security Rules enforce auth) and the Cloud Run URL (designed-public), but never put a truly-secret value here. Truly secret values (e.g. a third-party API key the backend doesn't proxy) must live on the backend, not the mobile app.
+
+For EAS Build, the same vars must also live under each profile's `env` block in `mobile/eas.json` — `mobile/.env` is gitignored and therefore not uploaded to EAS. `mobile/.env` is for local `expo start` / `expo run:ios` only; `mobile/eas.json` is the source of truth for cloud builds.
 
 ---
 
