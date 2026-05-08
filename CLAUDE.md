@@ -273,14 +273,24 @@ STORAGE_BUCKET=           # GCS bucket name (e.g., storybook-assets)
 PORT=8080                 # Cloud Run default
 ```
 
-### Mobile (`.env` / app.config.js)
+### Mobile (`mobile/.env`)
+
+Required by `services/firebase.ts` and `services/api.ts` — module-load throws if any are missing. Copy `mobile/.env.example` and populate.
 
 ```bash
 EXPO_PUBLIC_API_URL=https://storybook-api-XXXXX.us-central1.run.app
+
 EXPO_PUBLIC_FIREBASE_API_KEY=
 EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=
 EXPO_PUBLIC_FIREBASE_PROJECT_ID=
+EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET=
+EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
+EXPO_PUBLIC_FIREBASE_APP_ID=
 ```
+
+`EXPO_PUBLIC_*` vars are inlined into the JS bundle at build time. **Anything you put under this prefix ends up as plaintext in the production app binary** — fine for Firebase web API keys (designed-public; Firestore Security Rules enforce auth) and the Cloud Run URL (designed-public), but never put a truly-secret value here. Truly secret values (e.g. a third-party API key the backend doesn't proxy) must live on the backend, not the mobile app.
+
+For EAS Build, the same vars must also live under each profile's `env` block in `mobile/eas.json` — `mobile/.env` is gitignored and therefore not uploaded to EAS. `mobile/.env` is for local `expo start` / `expo run:ios` only; `mobile/eas.json` is the source of truth for cloud builds.
 
 ---
 

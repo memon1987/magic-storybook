@@ -1,8 +1,12 @@
 import axios, { AxiosInstance } from 'axios';
 import { getIdToken } from './firebase';
 
-// API base URL
-const API_URL = 'https://storybook-api-983903024759.us-central1.run.app';
+const API_URL = process.env.EXPO_PUBLIC_API_URL;
+if (!API_URL || /XXXX/.test(API_URL)) {
+  throw new Error(
+    'EXPO_PUBLIC_API_URL is missing or still set to a placeholder. Copy mobile/.env.example to mobile/.env and populate with the real Cloud Run URL.'
+  );
+}
 
 // Create axios instance
 const api: AxiosInstance = axios.create({
