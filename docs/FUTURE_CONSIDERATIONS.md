@@ -120,20 +120,6 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
-### FC-008: Security hardening
-
-**Status:** Executing
-**Size estimate:** S→M (see plan note)
-**Owner:** Zeshan
-**Plan file:** `docs/plans/fc-008.md` (published retroactively)
-
-**Problem / opportunity:** Firebase client config and API URL are hardcoded in source. Should use environment variables / build-time config.
-
-**Open questions:**
-- None — plan is published.
-
----
-
 ### FC-009: Infrastructure improvements
 
 **Status:** Consideration
@@ -189,3 +175,10 @@ Swapped `gemini-3-pro-image-preview` → `gemini-3.1-flash-image-preview` ("Nano
 - **Investigation:** [docs/investigations/fc-002-latency-benchmark-2026-04-28.md](investigations/fc-002-latency-benchmark-2026-04-28.md)
 - **Commit:** `13ba5d7`
 - **Outcome:** keep Flash; revisit if 3 of next 5 stories show > 60s avg per-page latency.
+
+### FC-008: Security hardening — Done 2026-04-28
+
+Externalized Firebase web config and Cloud Run API URL from hardcoded source into `EXPO_PUBLIC_*` env vars. Local dev sources them from gitignored `mobile/.env`; EAS Build sources them from per-profile `env` blocks in `mobile/eas.json`. Module-load throws an aggregated error listing every missing or placeholder var.
+
+- **Plan:** [docs/plans/fc-008.md](plans/fc-008.md) (published retroactively + adversarial peer review)
+- **PR:** [#4](https://github.com/memon1987/ai-storybook-app/pull/4) (squash-merged as `2458db2`)
