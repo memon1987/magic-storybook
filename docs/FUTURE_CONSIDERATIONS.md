@@ -136,20 +136,6 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
-### FC-013: Per-character reference image pipeline
-
-**Status:** Plan published
-**Size estimate:** M-L
-**Owner:** Zeshan
-**Plan file:** `docs/plans/fc-013.md`
-
-**Problem / opportunity:** The current illustration pipeline uses a single reference image (page 1) when generating pages 2..N. Gemini 3.1 Flash Image documents support for up to 4 character-consistency reference images per call — we're at 25% utilization. Generate dedicated per-character "model sheet" reference images upfront and pass them all (plus the page 1 setting ref) to every page generation. Goal: tighter character consistency across pages. Cost: +30-90s per story latency, +$0.03-0.05 per story.
-
-**Open questions:**
-- None — plan is published.
-
----
-
 ### FC-010: Parent dashboard & reading analytics
 
 **Status:** Consideration
@@ -203,3 +189,10 @@ Restored the writing-style step that was silently dropped from the create wizard
 
 - **Plan:** [docs/plans/fc-014.md](plans/fc-014.md) (adversarial peer review caught two HIGH issues; both fixed before merge)
 - **PR:** [#6](https://github.com/memon1987/ai-storybook-app/pull/6) (squash-merged as `76f0347`)
+
+### FC-013: Per-character reference image pipeline — Done 2026-05-11
+
+Added a new pipeline stage that generates one model-sheet reference image per named character before any story pages, then passes all character refs (plus the page-1 setting ref) to every page generation. Goal: tighter character consistency by using Gemini 3.1 Flash Image's multi-reference capability (up to 4 character refs / 14 total). Adds ~30-90s per story.
+
+- **Plan:** [docs/plans/fc-013.md](plans/fc-013.md) (adversarial peer review caught 3 HIGH issues including thundering-herd retries and placehold.co URL leakage; all fixed before merge)
+- **PR:** [#7](https://github.com/memon1987/ai-storybook-app/pull/7) (squash-merged as `5f86a8f`)
