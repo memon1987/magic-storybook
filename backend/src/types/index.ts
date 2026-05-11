@@ -52,6 +52,9 @@ export interface GeneratedStory {
   characterSheets: CharacterVisualSheet[];
   settingIdentity: SettingVisualIdentity;
   pages: StoryPage[];
+  // FC-013: per-character reference image URLs (key = character name, value = Cloud Storage public URL).
+  // Populated by generateAllIllustrations after the new pipeline runs.
+  characterReferenceUrls?: Record<string, string>;
 }
 
 // Story page with image URL (after illustration generation)
@@ -77,6 +80,7 @@ export interface StoryDocument {
   artStyle: ArtStyle;
   status: 'pending' | 'generating' | 'complete' | 'failed';
   pageCount?: number;
+  characterReferenceUrls?: Record<string, string>;  // FC-013
   createdAt: FirebaseFirestore.Timestamp;
 }
 

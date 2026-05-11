@@ -150,6 +150,7 @@ REQUIREMENTS:
 
 CHARACTER VISUAL CONSISTENCY:
 - Create a "characterSheets" array with ONE entry for each named character in the story (${input.childName} and ${friendRef} at minimum)
+- IMPORTANT: ${input.childName} (the child protagonist) MUST be the FIRST entry in the array. Their reference image will be used as the primary anchor for character consistency across all pages.
 - Each entry must be EXHAUSTIVELY detailed about visual appearance — imagine briefing an illustrator who must draw this character identically across ${pageCount} pages
 - Include: species/type, exact body colors and patterns, approximate size, clothing (specific colors, style, accessories), hairstyle/fur texture, distinguishing features (e.g., a red scarf, freckles, a curly tail), eye color, and body shape
 - Use specific colors ("sky blue", "golden yellow") not vague ("blue", "yellow")

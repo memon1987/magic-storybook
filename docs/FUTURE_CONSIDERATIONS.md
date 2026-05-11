@@ -136,6 +136,20 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
+### FC-013: Per-character reference image pipeline
+
+**Status:** Plan published
+**Size estimate:** M-L
+**Owner:** Zeshan
+**Plan file:** `docs/plans/fc-013.md`
+
+**Problem / opportunity:** The current illustration pipeline uses a single reference image (page 1) when generating pages 2..N. Gemini 3.1 Flash Image documents support for up to 4 character-consistency reference images per call — we're at 25% utilization. Generate dedicated per-character "model sheet" reference images upfront and pass them all (plus the page 1 setting ref) to every page generation. Goal: tighter character consistency across pages. Cost: +30-90s per story latency, +$0.03-0.05 per story.
+
+**Open questions:**
+- None — plan is published.
+
+---
+
 ### FC-010: Parent dashboard & reading analytics
 
 **Status:** Consideration
