@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { Firestore, FieldValue } from '@google-cloud/firestore';
 import { v4 as uuid } from 'uuid';
 import { authMiddleware } from '../middleware/auth';
+import { WRITING_STYLE_IDS } from '../prompts/story';
 import {
   generateStory,
   generateAllIllustrations,
@@ -64,12 +65,14 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
   }
 
   // Validate writing style (FC-014) — optional; absence falls back to authorStyle then default
+  // WRITING_STYLE_IDS imported from prompts/story.ts is the single source of truth — adding a
+  // new id there auto-extends this validator without a separate edit (review fix H3).
   if (
     input.writingStyle !== undefined &&
-    !['bouncy-rhymes', 'gentle-refrains', 'sweet-simple'].includes(input.writingStyle)
+    !(WRITING_STYLE_IDS as readonly string[]).includes(input.writingStyle)
   ) {
     res.status(400).json({
-      error: 'Invalid writingStyle. Must be: bouncy-rhymes, gentle-refrains, or sweet-simple',
+      error: `Invalid writingStyle. Must be: ${WRITING_STYLE_IDS.join(', ')}`,
     });
     return;
   }

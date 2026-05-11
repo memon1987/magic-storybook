@@ -29,20 +29,25 @@ api.interceptors.request.use(async (config) => {
 // Types
 export type ArtStyle = 'watercolor' | 'cartoon' | 'storybook-classic' | 'claymation' | 'studio-ghibli' | 'pixar-3d';
 export type StoryLength = 'short' | 'medium' | 'long';
-export type WritingStyleId = 'bouncy-rhymes' | 'gentle-refrains' | 'sweet-simple';
 
+// FC-014: voices the wizard offers. Generic UI labels — no copyrighted author names.
+// WRITING_STYLES is the single source of truth on the mobile side; WritingStyleId is
+// derived from it so adding a new entry below auto-extends the type. Backend keeps its
+// own WRITING_STYLE_IDS list in `backend/src/prompts/story.ts`; the two must stay in
+// sync at the API contract (no automated cross-checking — flag in code review).
 export interface WritingStyleOption {
-  id: WritingStyleId;
+  id: string;
   label: string;
   description: string;
 }
 
-// FC-014: voices the wizard offers. Generic UI labels — no copyrighted author names.
-export const WRITING_STYLES: WritingStyleOption[] = [
-  { id: 'bouncy-rhymes', label: 'Bouncy Rhymes', description: 'Rhyming and energetic' },
+export const WRITING_STYLES = [
+  { id: 'bouncy-rhymes',   label: 'Bouncy Rhymes',  description: 'Rhyming and energetic' },
   { id: 'gentle-refrains', label: 'Gentle Refrains', description: 'Soft, repeating, sensory' },
-  { id: 'sweet-simple', label: 'Sweet & Simple', description: 'Short lines, big feelings' },
-];
+  { id: 'sweet-simple',    label: 'Sweet & Simple', description: 'Short lines, big feelings' },
+] as const satisfies readonly WritingStyleOption[];
+
+export type WritingStyleId = (typeof WRITING_STYLES)[number]['id'];
 
 export interface StoryInput {
   childName: string;
