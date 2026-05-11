@@ -24,7 +24,14 @@ import Animated, {
   FadeIn,
   FadeOut,
 } from 'react-native-reanimated';
-import { generateStory, ArtStyle, StoryLength, StoryInput } from '../../services/api';
+import {
+  generateStory,
+  ArtStyle,
+  StoryLength,
+  StoryInput,
+  WritingStyleId,
+  WRITING_STYLES,
+} from '../../services/api';
 import { useTheme } from '../../contexts/ThemeContext';
 import { GradientBackground } from '../../components/GradientBackground';
 import { ProgressBar } from '../../components/ProgressBar';
@@ -84,17 +91,19 @@ interface FormData {
   favoriteAnimal: string;
   setting: string;
   moral: string;
+  writingStyle: WritingStyleId;
   length: StoryLength;
   artStyle: ArtStyle;
 }
 
-const TOTAL_STEPS = 6;
+const TOTAL_STEPS = 7;
 
 const INITIAL_FORM: FormData = {
   childName: '',
   favoriteAnimal: '',
   setting: '',
   moral: '',
+  writingStyle: 'gentle-refrains',
   length: 'medium',
   artStyle: 'watercolor',
 };
@@ -133,8 +142,9 @@ export default function CreateScreen() {
         return formData.setting.trim().length > 0;
       case 3:
         return formData.moral.trim().length > 0;
-      case 4:
-      case 5:
+      case 4: // writing style — always has a default
+      case 5: // length
+      case 6: // art style
         return true;
       default:
         return false;
@@ -151,6 +161,7 @@ export default function CreateScreen() {
         favoriteAnimal: formData.favoriteAnimal.trim(),
         setting: formData.setting.trim().toLowerCase(),
         moral: formData.moral.trim().toLowerCase(),
+        writingStyle: formData.writingStyle,
         length: formData.length,
         artStyle: formData.artStyle,
       });
@@ -248,12 +259,18 @@ export default function CreateScreen() {
               />
             )}
             {stepIndex === 4 && (
+              <WritingStyleStep
+                value={formData.writingStyle}
+                onChange={(v) => update('writingStyle', v)}
+              />
+            )}
+            {stepIndex === 5 && (
               <LengthStep
                 value={formData.length}
                 onChange={(v) => update('length', v)}
               />
             )}
-            {stepIndex === 5 && (
+            {stepIndex === 6 && (
               <ArtStyleStep
                 value={formData.artStyle}
                 onChange={(v) => update('artStyle', v)}
@@ -347,6 +364,58 @@ function TextStep({ title, subtitle, placeholder, value, onChange, suggestions }
           ))}
         </ScrollView>
       )}
+    </View>
+  );
+}
+
+interface WritingStyleStepProps {
+  value: WritingStyleId;
+  onChange: (v: WritingStyleId) => void;
+}
+
+function WritingStyleStep({ value, onChange }: WritingStyleStepProps) {
+  const { palette } = useTheme();
+  return (
+    <View style={styles.step}>
+      <Text style={[styles.stepTitle, { color: palette.colors.textDark }]}>
+        Pick a writing style
+      </Text>
+      <Text style={[styles.stepSubtitle, { color: palette.colors.textMuted }]}>
+        How should the words feel?
+      </Text>
+      <View style={styles.lengthList}>
+        {WRITING_STYLES.map((opt) => {
+          const selected = value === opt.id;
+          return (
+            <AnimatedPressable
+              key={opt.id}
+              onPress={() => onChange(opt.id)}
+              style={[
+                styles.lengthCard,
+                {
+                  backgroundColor: palette.colors.cardBg,
+                  borderColor: selected ? palette.colors.accent : `${palette.colors.textMuted}22`,
+                  borderWidth: selected ? 2 : 1,
+                },
+              ]}
+            >
+              <View style={styles.lengthCardLeft}>
+                <Text style={[styles.lengthLabel, { color: palette.colors.textDark }]}>
+                  {opt.label}
+                </Text>
+                <Text style={[styles.lengthMeta, { color: palette.colors.textMuted }]}>
+                  {opt.description}
+                </Text>
+              </View>
+              {selected && (
+                <View style={[styles.checkCircle, { backgroundColor: palette.colors.accent }]}>
+                  <Ionicons name="checkmark" size={16} color="#FFFFFF" />
+                </View>
+              )}
+            </AnimatedPressable>
+          );
+        })}
+      </View>
     </View>
   );
 }

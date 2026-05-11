@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { Firestore, FieldValue } from '@google-cloud/firestore';
 import { v4 as uuid } from 'uuid';
 import { authMiddleware } from '../middleware/auth';
+import { WRITING_STYLE_IDS } from '../prompts/story';
 import {
   generateStory,
   generateAllIllustrations,
@@ -63,6 +64,19 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
     return;
   }
 
+  // Validate writing style (FC-014) — optional; absence falls back to authorStyle then default
+  // WRITING_STYLE_IDS imported from prompts/story.ts is the single source of truth — adding a
+  // new id there auto-extends this validator without a separate edit (review fix H3).
+  if (
+    input.writingStyle !== undefined &&
+    !(WRITING_STYLE_IDS as readonly string[]).includes(input.writingStyle)
+  ) {
+    res.status(400).json({
+      error: `Invalid writingStyle. Must be: ${WRITING_STYLE_IDS.join(', ')}`,
+    });
+    return;
+  }
+
   try {
     const storyId = uuid();
     const storyRef = db.collection('stories').doc(storyId);
@@ -87,6 +101,7 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       setting: input.setting,
       moral: input.moral,
       authorStyle: input.authorStyle || null,
+      writingStyle: input.writingStyle || null,
       length: input.length,
       artStyle,
       createdAt: FieldValue.serverTimestamp(),
@@ -144,6 +159,7 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       setting: input.setting,
       moral: input.moral,
       authorStyle: input.authorStyle || null,
+      writingStyle: input.writingStyle || null,
       artStyle,
       pageCount: story.pages.length,
       pages: story.pages.map((page, index) => ({

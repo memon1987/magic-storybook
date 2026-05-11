@@ -1,4 +1,76 @@
-import { StoryInput } from '../types';
+import { StoryInput, WritingStyleId } from '../types';
+
+/**
+ * Single source of truth for the writing-style ids that ship.
+ * `WritingStyleId` is derived from this in `types/index.ts`; the route validator
+ * imports this list to validate the request body. Adding a new id here requires
+ * also adding a descriptor + page-target entry below — both lookups use
+ * `Record<WritingStyleId, …>` so tsc enforces exhaustiveness.
+ */
+export const WRITING_STYLE_IDS = [
+  'bouncy-rhymes',
+  'gentle-refrains',
+  'sweet-simple',
+] as const satisfies readonly WritingStyleId[];
+
+/**
+ * Per-voice page targets (FC-014 review fix H1/H2).
+ *
+ * The previous version used a single global "2-4 sentences (30-60 words/page)"
+ * cap. That conflicted with both:
+ *   - "Sweet & Simple" 3-7 word sentences × 2-4 sentences = 6-28 words/page (below 30 floor)
+ *   - "Bouncy Rhymes" AABB rhyme scheme requiring even sentence counts (3 sentences = unrhymable)
+ *
+ * Voice-aware caps let each voice produce text that matches its descriptor.
+ */
+interface PageTarget {
+  sentencesText: string;
+  wordsText: string;
+}
+
+const WRITING_STYLE_PAGE_TARGETS: Record<WritingStyleId, PageTarget> = {
+  'bouncy-rhymes': {
+    // Even sentence count so AABB always closes; 4 = full AABB stanza.
+    sentencesText: 'exactly 4 short rhyming lines per page (one full AABB stanza)',
+    wordsText: '20-50 words per page',
+  },
+  'gentle-refrains': {
+    sentencesText: '3-4 short sentences per page',
+    wordsText: '30-55 words per page',
+  },
+  'sweet-simple': {
+    // Each sentence is short, but more of them per page so total still feels substantial.
+    sentencesText: '4-6 very short sentences per page (3-7 words each)',
+    wordsText: '15-35 words per page',
+  },
+};
+
+const DEFAULT_PAGE_TARGET: PageTarget = {
+  sentencesText: '2-4 short, engaging sentences per page',
+  wordsText: '30-60 words per page',
+};
+
+/**
+ * Structural voice descriptors for FC-014's 3-voice writing-style picker.
+ * Author names deliberately excluded; descriptors are purely structural so the
+ * LLM has no copyrighted reference to draw from.
+ *
+ * Review-fix notes (FC-014 PR #6 review):
+ *   - M2: dropped "anapestic-leaning" (LLMs cannot scan stress); replaced with
+ *     a galloping-rhythm example so the model has something concrete to mimic.
+ *   - M3: replaced vague "echo a phrase from the previous page" with a specific
+ *     refrain pattern (one short phrase, repeated verbatim ≥3 times).
+ *   - Removed "Avoid sharp consonants" (M1 — phonological instruction LLMs
+ *     don't reliably honor).
+ */
+const WRITING_STYLE_DESCRIPTORS: Record<WritingStyleId, string> = {
+  'bouncy-rhymes':
+    'Write in rhyming couplets with a galloping, forward-driving rhythm — like "On a moonlit night with a dragonfly\'s flight". Use AABB rhyme scheme: lines 1+2 rhyme, lines 3+4 rhyme. Repeat key phrases across pages for emphasis. Sprinkle in exclamations. Keep vocabulary at kindergarten level with punchy single-syllable words where possible.',
+  'gentle-refrains':
+    'Pick ONE short refrain phrase (3-5 words) tied to the moral and repeat it VERBATIM on at least 3 pages — ideally as the closing line of those pages. Use sensory adjectives (warm, soft, slow, golden). Structure the story as a step-by-step or day-by-day progression. Vocabulary is simple, soft, and concrete.',
+  'sweet-simple':
+    'Write in very short sentences — strictly 3 to 7 words each, no longer. Use questions to engage the child ("Do you see?"). Include sound words and onomatopoeia ("Boom!", "Whoosh!"). Convey big emotions through simple words. Use lots of repetition and direct address (you, your, my).',
+};
 
 /**
  * Get page count based on story length
@@ -31,9 +103,20 @@ function getPronounBlock(childName: string, gender?: 'boy' | 'girl'): string {
 export function buildStoryPrompt(input: StoryInput): string {
   const pageCount = getPageCount(input.length);
 
-  const styleGuide = input.authorStyle
-    ? `Write in the style of ${input.authorStyle}, capturing their unique voice, rhythm, and storytelling approach.`
-    : 'Write in a warm, engaging, and gentle children\'s book style with simple but evocative language.';
+  // FC-014: writingStyle (structured) takes precedence over legacy authorStyle (free-text).
+  // Default fallback unchanged when neither is set.
+  let styleGuide: string;
+  let pageTarget: PageTarget;
+  if (input.writingStyle && WRITING_STYLE_DESCRIPTORS[input.writingStyle]) {
+    styleGuide = WRITING_STYLE_DESCRIPTORS[input.writingStyle];
+    pageTarget = WRITING_STYLE_PAGE_TARGETS[input.writingStyle];
+  } else if (input.authorStyle && input.authorStyle.trim().length > 0) {
+    styleGuide = `Write in the style of ${input.authorStyle}, capturing their unique voice, rhythm, and storytelling approach.`;
+    pageTarget = DEFAULT_PAGE_TARGET;
+  } else {
+    styleGuide = 'Write in a warm, engaging, and gentle children\'s book style with simple but evocative language.';
+    pageTarget = DEFAULT_PAGE_TARGET;
+  }
 
   // Build friend description from new or legacy fields
   const friendRef = input.specialFriendName || input.favoriteAnimal || 'special friend';
@@ -55,7 +138,7 @@ ${styleGuide}
 ${getPronounBlock(input.childName, input.childGender)}
 REQUIREMENTS:
 1. Use simple vocabulary appropriate for ages 3-8 (avoid complex words)
-2. Each page should have 2-4 short, engaging sentences (30-60 words max per page)
+2. Each page should have ${pageTarget.sentencesText} (${pageTarget.wordsText}). The voice instructions in WRITING STYLE above are authoritative — match them exactly even if it means hitting the floor or ceiling of these counts.
 3. Create a clear story arc with:
    - Beginning: Introduce ${input.childName} and ${friendRef}, set up the adventure
    - Middle: Present a gentle challenge or discovery related to ${input.moral}
