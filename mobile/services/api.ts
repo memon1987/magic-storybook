@@ -29,6 +29,20 @@ api.interceptors.request.use(async (config) => {
 // Types
 export type ArtStyle = 'watercolor' | 'cartoon' | 'storybook-classic' | 'claymation' | 'studio-ghibli' | 'pixar-3d';
 export type StoryLength = 'short' | 'medium' | 'long';
+export type WritingStyleId = 'bouncy-rhymes' | 'gentle-refrains' | 'sweet-simple';
+
+export interface WritingStyleOption {
+  id: WritingStyleId;
+  label: string;
+  description: string;
+}
+
+// FC-014: voices the wizard offers. Generic UI labels — no copyrighted author names.
+export const WRITING_STYLES: WritingStyleOption[] = [
+  { id: 'bouncy-rhymes', label: 'Bouncy Rhymes', description: 'Rhyming and energetic' },
+  { id: 'gentle-refrains', label: 'Gentle Refrains', description: 'Soft, repeating, sensory' },
+  { id: 'sweet-simple', label: 'Sweet & Simple', description: 'Short lines, big feelings' },
+];
 
 export interface StoryInput {
   childName: string;
@@ -38,7 +52,8 @@ export interface StoryInput {
   specialFriendDescription?: string;
   setting: string;
   moral: string;
-  authorStyle?: string;
+  authorStyle?: string;            // legacy: free-text; retained for back-compat
+  writingStyle?: WritingStyleId;   // FC-014: structured voice picker; takes precedence over authorStyle
   length: StoryLength;
   artStyle?: ArtStyle;
 }
@@ -60,6 +75,7 @@ export interface Story {
   setting: string;
   moral: string;
   authorStyle?: string;
+  writingStyle?: WritingStyleId;
   artStyle: ArtStyle;
   pageCount: number;
   pages?: StoryPage[];

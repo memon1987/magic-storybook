@@ -6,6 +6,9 @@ export interface AuthRequest extends Request {
   user?: admin.auth.DecodedIdToken;
 }
 
+// Writing-style ids exposed to the client (FC-014)
+export type WritingStyleId = 'bouncy-rhymes' | 'gentle-refrains' | 'sweet-simple';
+
 // Story input from client
 export interface StoryInput {
   childName: string;
@@ -15,7 +18,8 @@ export interface StoryInput {
   specialFriendDescription?: string; // e.g., "a fluffy orange cat"
   setting: string;
   moral: string;
-  authorStyle?: string;
+  authorStyle?: string;              // legacy: free-text author name; retained for back-compat
+  writingStyle?: WritingStyleId;     // FC-014: structured voice picker; takes precedence over authorStyle
   length: 'short' | 'medium' | 'long';
   artStyle?: ArtStyle;
 }
@@ -68,6 +72,7 @@ export interface StoryDocument {
   setting: string;
   moral: string;
   authorStyle?: string;
+  writingStyle?: WritingStyleId;
   length: 'short' | 'medium' | 'long';
   artStyle: ArtStyle;
   status: 'pending' | 'generating' | 'complete' | 'failed';

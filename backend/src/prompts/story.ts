@@ -1,4 +1,18 @@
-import { StoryInput } from '../types';
+import { StoryInput, WritingStyleId } from '../types';
+
+/**
+ * Structural voice descriptors for FC-014's 3-voice writing-style picker.
+ * Author names deliberately excluded; descriptors are purely structural so the
+ * LLM has no copyrighted reference to draw from.
+ */
+const WRITING_STYLE_DESCRIPTORS: Record<WritingStyleId, string> = {
+  'bouncy-rhymes':
+    'Write in rhyming couplets with an energetic, anapestic-leaning rhythm. Use AABB rhyme scheme. Repeat key phrases for emphasis. Sprinkle in exclamations. Keep vocabulary at kindergarten level with punchy single-syllable words where possible.',
+  'gentle-refrains':
+    'Write with repetitive refrains and sensory adjectives. Use a day-by-day or step-by-step progression. Each page should echo a phrase from the previous page. Vocabulary is simple, soft, and concrete. Avoid sharp consonants where possible — favor flowing word sounds.',
+  'sweet-simple':
+    'Write in very short sentences — 3 to 7 words each. Use questions to engage the child. Include sound words and onomatopoeia. Convey big emotions through simple words. Use lots of repetition and direct address (you, your, my).',
+};
 
 /**
  * Get page count based on story length
@@ -31,9 +45,16 @@ function getPronounBlock(childName: string, gender?: 'boy' | 'girl'): string {
 export function buildStoryPrompt(input: StoryInput): string {
   const pageCount = getPageCount(input.length);
 
-  const styleGuide = input.authorStyle
-    ? `Write in the style of ${input.authorStyle}, capturing their unique voice, rhythm, and storytelling approach.`
-    : 'Write in a warm, engaging, and gentle children\'s book style with simple but evocative language.';
+  // FC-014: writingStyle (structured) takes precedence over legacy authorStyle (free-text).
+  // Default fallback unchanged when neither is set.
+  let styleGuide: string;
+  if (input.writingStyle && WRITING_STYLE_DESCRIPTORS[input.writingStyle]) {
+    styleGuide = WRITING_STYLE_DESCRIPTORS[input.writingStyle];
+  } else if (input.authorStyle) {
+    styleGuide = `Write in the style of ${input.authorStyle}, capturing their unique voice, rhythm, and storytelling approach.`;
+  } else {
+    styleGuide = 'Write in a warm, engaging, and gentle children\'s book style with simple but evocative language.';
+  }
 
   // Build friend description from new or legacy fields
   const friendRef = input.specialFriendName || input.favoriteAnimal || 'special friend';

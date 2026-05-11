@@ -136,6 +136,20 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
+### FC-014: Writing-style picker (3 voices, generic names)
+
+**Status:** Plan published
+**Size estimate:** S-M
+**Owner:** Zeshan
+**Plan file:** `docs/plans/fc-014.md`
+
+**Problem / opportunity:** A "writing style" wizard step existed in the original create form but was silently dropped during the FC-001 redesign. The backend `authorStyle` field still wires through `buildStoryPrompt`, so all stories currently fall back to a single default voice. Restore as a 3-voice picker with generic UI names ("Bouncy Rhymes" / "Gentle Refrains" / "Sweet & Simple") and structural-descriptor prompts (no copyrighted author names exposed to the LLM).
+
+**Open questions:**
+- None — plan is published.
+
+---
+
 ### FC-010: Parent dashboard & reading analytics
 
 **Status:** Consideration

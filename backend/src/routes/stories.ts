@@ -63,6 +63,17 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
     return;
   }
 
+  // Validate writing style (FC-014) — optional; absence falls back to authorStyle then default
+  if (
+    input.writingStyle !== undefined &&
+    !['bouncy-rhymes', 'gentle-refrains', 'sweet-simple'].includes(input.writingStyle)
+  ) {
+    res.status(400).json({
+      error: 'Invalid writingStyle. Must be: bouncy-rhymes, gentle-refrains, or sweet-simple',
+    });
+    return;
+  }
+
   try {
     const storyId = uuid();
     const storyRef = db.collection('stories').doc(storyId);
@@ -87,6 +98,7 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       setting: input.setting,
       moral: input.moral,
       authorStyle: input.authorStyle || null,
+      writingStyle: input.writingStyle || null,
       length: input.length,
       artStyle,
       createdAt: FieldValue.serverTimestamp(),
@@ -144,6 +156,7 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       setting: input.setting,
       moral: input.moral,
       authorStyle: input.authorStyle || null,
+      writingStyle: input.writingStyle || null,
       artStyle,
       pageCount: story.pages.length,
       pages: story.pages.map((page, index) => ({
