@@ -52,11 +52,10 @@ LAYOUT:
   1. FRONT view (left): character facing the viewer head-on
   2. THREE-QUARTER view (center): character at a 45-degree angle, slight body turn
   3. ACTION pose (right): character in a dynamic pose that shows their personality (running, jumping, waving, hugging — pick what suits this character)
-- Below the three figures, in clear bold lettering, the character's name: "${name}"
 
 CONSTRAINTS:
 - Only ONE character in the image (the character above, three times)
-- NO other characters, NO scenery, NO speech bubbles, NO additional text other than the name label
+- NO other characters, NO scenery, NO speech bubbles, NO text or labels of any kind. This is a pure visual reference; the character's identity is established by the figures themselves, not by labels.
 - All three views must depict EXACTLY the same character with identical colors, clothing, proportions, and distinguishing features
 - Style suitable for a children's picture book ages 3-8: friendly, expressive, age-appropriate
 - High clarity — this image will be used as a reference for the model when generating subsequent story pages, so the character's distinguishing features must be unambiguous`;

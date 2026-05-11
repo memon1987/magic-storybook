@@ -119,6 +119,7 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       storyId,
       favoriteAnimal,
       artStyle,
+      input.childName,
     );
 
     // Step 3: Save pages to Firestore

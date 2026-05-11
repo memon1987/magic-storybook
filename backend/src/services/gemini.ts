@@ -43,6 +43,22 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * FC-013 review fix H1: retry backoff with jitter.
+ *
+ * Without jitter, parallel callers (e.g., 3 character refs racing) that all
+ * hit a 503 in the same window sleep for the exact same duration and retry in
+ * lockstep — a textbook thundering herd. Jitter spreads the retries across a
+ * window so retries don't all hit Gemini simultaneously.
+ *
+ * Returns base * (0.5 .. 1.5) random multiplier on the same exponential
+ * backoff schedule (2s, 4s, 8s).
+ */
+function jitteredBackoffMs(attempt: number): number {
+  const base = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+  return Math.round(base * (0.5 + Math.random()));
+}
+
+/**
  * Check if an error is retryable (503 Service Unavailable)
  */
 function isRetryableError(error: unknown): boolean {
@@ -74,7 +90,7 @@ export async function generateStory(input: StoryInput): Promise<GeneratedStory> 
     } catch (error) {
       lastError = error;
       if (isRetryableError(error) && attempt < MAX_RETRIES) {
-        const delayMs = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+        const delayMs = jitteredBackoffMs(attempt);
         console.log(`Story text: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
         await sleep(delayMs);
         continue;
@@ -239,11 +255,16 @@ export async function generateIllustration(
 
   const contents = buildPageContents(references, promptText);
 
+  // FC-013 review fix H3: log multimodal payload size so post-deploy we can
+  // diagnose payload-too-large failures (Gemini documents a 20MB inline cap).
+  const payloadBytes = JSON.stringify(contents).length;
   const refSummary =
     references.length === 0
       ? ''
       : ` (with ${references.filter((r) => r.type === 'character').length} character ref(s)${references.some((r) => r.type === 'setting') ? ' + setting ref' : ''})`;
-  console.log(`Generating illustration for page ${pageNumber} with ${IMAGE_MODEL}${refSummary}...`);
+  console.log(
+    `Generating illustration for page ${pageNumber} with ${IMAGE_MODEL}${refSummary} [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
+  );
   const startTime = Date.now();
 
   let lastError: unknown = null;
@@ -289,7 +310,7 @@ export async function generateIllustration(
       lastError = error;
 
       if (isRetryableError(error) && attempt < MAX_RETRIES) {
-        const delayMs = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+        const delayMs = jitteredBackoffMs(attempt);
         console.log(`Page ${pageNumber}: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
         await sleep(delayMs);
         continue;
@@ -300,9 +321,7 @@ export async function generateIllustration(
     }
   }
 
-  console.error(`All ${MAX_RETRIES} attempts failed for page ${pageNumber}`);
-  // Avoid "unused variable" lint when retries don't trigger logging of lastError
-  void lastError;
+  console.error(`All ${MAX_RETRIES} attempts failed for page ${pageNumber}; last error:`, lastError);
   return { publicUrl: `https://placehold.co/800x600/png?text=Page+${pageNumber}`, imageBase64: null, mimeType: 'image/png' };
 }
 
@@ -328,7 +347,11 @@ export async function generateCharacterReference(
   const promptText = buildCharacterReferencePrompt(character.name, character.description, style);
   const contents: Array<{ text: string }> = [{ text: promptText }];
 
-  console.log(`Generating character reference for "${character.name}" with ${IMAGE_MODEL}...`);
+  // FC-013 review fix H3: log payload size for parity with page-gen logs.
+  const payloadBytes = JSON.stringify(contents).length;
+  console.log(
+    `Generating character reference for "${character.name}" with ${IMAGE_MODEL} [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
+  );
   const startTime = Date.now();
   const safeNameSlug = character.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'character';
 
@@ -365,7 +388,7 @@ export async function generateCharacterReference(
     } catch (error) {
       lastError = error;
       if (isRetryableError(error) && attempt < MAX_RETRIES) {
-        const delayMs = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+        const delayMs = jitteredBackoffMs(attempt);
         console.log(`Character ref "${character.name}": 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
         await sleep(delayMs);
         continue;
@@ -375,8 +398,7 @@ export async function generateCharacterReference(
     }
   }
 
-  console.error(`All ${MAX_RETRIES} attempts failed for character reference "${character.name}"`);
-  void lastError;
+  console.error(`All ${MAX_RETRIES} attempts failed for character reference "${character.name}"; last error:`, lastError);
   return {
     name: character.name,
     publicUrl: `https://placehold.co/800x600/png?text=${encodeURIComponent(character.name)}`,
@@ -411,6 +433,7 @@ export async function generateAllIllustrations(
   storyId: string,
   animalType: string,
   style: ArtStyle = 'watercolor',
+  childName?: string,
 ): Promise<AllIllustrationsResult> {
   const startTime = Date.now();
   const sortedPages = [...story.pages].sort((a, b) => a.pageNumber - b.pageNumber);
@@ -422,16 +445,36 @@ export async function generateAllIllustrations(
   // Only populated for refs that succeeded with real image data (placeholder fallbacks are URL-only).
   const characterRefImages: ReferenceImage[] = [];
 
-  if (story.characterSheets.length > 0) {
+  // FC-013 review fix: multimodal models often weight the first reference image
+  // more heavily. Sort characterSheets so the protagonist (matched by childName)
+  // is reference #1 wherever they appear. The story prompt also asks for
+  // childName as the first entry, but this is a defensive belt + suspenders.
+  const orderedSheets = childName
+    ? [...story.characterSheets].sort((a, b) => {
+        const aIsChild = a.name.toLowerCase() === childName.toLowerCase();
+        const bIsChild = b.name.toLowerCase() === childName.toLowerCase();
+        if (aIsChild && !bIsChild) return -1;
+        if (!aIsChild && bIsChild) return 1;
+        return 0;
+      })
+    : story.characterSheets;
+
+  if (orderedSheets.length > 0) {
     console.log(
-      `Step 2a (FC-013): generating ${story.characterSheets.length} character reference image(s) in parallel: ${story.characterSheets.map((c) => c.name).join(', ')}...`,
+      `Step 2a (FC-013): generating ${orderedSheets.length} character reference image(s) in parallel: ${orderedSheets.map((c) => c.name).join(', ')}...`,
     );
     const refResults = await Promise.all(
-      story.characterSheets.map((c) => generateCharacterReference(c, storyId, style)),
+      orderedSheets.map((c) => generateCharacterReference(c, storyId, style)),
     );
     for (const result of refResults) {
-      characterReferenceUrls[result.name] = result.publicUrl;
+      // FC-013 review fix H2: only persist + return refs that actually produced
+      // image data. Failed refs degrade gracefully — page generations skip their
+      // visual ref, characterSheets[] text description still applies, and we
+      // don't pollute Firestore (or any future "About the characters" UI) with
+      // placehold.co URLs for what is supposed to be the canonical character
+      // visual ID.
       if (result.imageBase64) {
+        characterReferenceUrls[result.name] = result.publicUrl;
         characterRefImages.push({
           type: 'character',
           name: result.name,
@@ -440,7 +483,7 @@ export async function generateAllIllustrations(
         });
       } else {
         console.warn(
-          `Character reference for "${result.name}" failed to produce image data — page generations will skip its visual ref (text description still applies).`,
+          `Character reference for "${result.name}" failed to produce image data — omitting from characterReferenceUrls; page generations will skip its visual ref (text description still applies).`,
         );
       }
     }
