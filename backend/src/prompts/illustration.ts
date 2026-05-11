@@ -15,6 +15,11 @@ const STYLE_DESCRIPTIONS: Record<ArtStyle, string> = {
 /**
  * Build an illustration prompt for Gemini image generation
  * Features: character sheet consistency, clear text reading flow
+ *
+ * FC-013: when `characterReferences` is non-empty, the call also attaches
+ * those character ref images as multimodal inputs (built by gemini.ts).
+ * The prompt body explicitly numbers them so the model can correlate the
+ * "Character reference 1: NAME" labels in `contents` with the prompt text.
  */
 export function buildIllustrationPrompt(
   sceneDescription: string,
@@ -22,21 +27,31 @@ export function buildIllustrationPrompt(
   style: ArtStyle = 'watercolor',
   pageText?: string,
   characterSheets?: CharacterVisualSheet[],
-  settingIdentity?: SettingVisualIdentity
+  settingIdentity?: SettingVisualIdentity,
+  characterReferences?: Array<{ name: string }>,
 ): string {
   const styleDesc = STYLE_DESCRIPTIONS[style];
 
   // Build character consistency block
+  const refsBlock = characterReferences && characterReferences.length > 0
+    ? `
+
+CHARACTER REFERENCE IMAGES ATTACHED:
+The first ${characterReferences.length} reference image(s) attached to this prompt are the canonical model sheets for the named characters in this story. Each reference shows ONE character from front, three-quarter, and action poses on a white background. Use these as the visual ground truth — match each character's appearance EXACTLY when they appear on this page:
+${characterReferences.map((c, i) => `- Reference image ${i + 1} = ${c.name}`).join('\n')}
+If a setting reference image is also attached, it is the page-1 illustration of this story; use it for color palette, art style, and environmental details.`
+    : '';
+
   const characterBlock = characterSheets && characterSheets.length > 0
     ? `CHARACTER REFERENCE SHEET — FOLLOW EXACTLY ON EVERY PAGE:
 ${characterSheets.map(c => `• ${c.name}: ${c.description}`).join('\n')}
 
-CONSISTENCY IS CRITICAL: The characters described above must look IDENTICAL on every page of this book. Do not change their colors, clothing, proportions, or distinguishing features. A reader flipping between pages must recognize the same characters instantly.`
+CONSISTENCY IS CRITICAL: The characters described above must look IDENTICAL on every page of this book. Do not change their colors, clothing, proportions, or distinguishing features. A reader flipping between pages must recognize the same characters instantly.${refsBlock}`
     : `CHARACTER REQUIREMENTS:
 - The ${animalType} should be friendly, round, and huggable with exaggerated expressions
 - BIG expressive eyes that clearly convey emotion
 - Soft, rounded, bouncy shapes - no sharp edges
-- Consistent character design suitable for a picture book series`;
+- Consistent character design suitable for a picture book series${refsBlock}`;
 
   // Build setting consistency block
   const settingBlock = settingIdentity && settingIdentity.description

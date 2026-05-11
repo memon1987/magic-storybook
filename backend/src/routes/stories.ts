@@ -112,13 +112,13 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
     const storyInput: StoryInput = { ...input, favoriteAnimal };
     const story = await generateStory(storyInput);
 
-    // Step 2: Generate all illustrations in parallel
+    // Step 2: Generate all illustrations (FC-013: includes per-character refs upfront)
     console.log('Step 2: Generating illustrations...');
-    const imageUrls = await generateAllIllustrations(
+    const { pageUrls, characterReferenceUrls } = await generateAllIllustrations(
       story,
       storyId,
       favoriteAnimal,
-      artStyle
+      artStyle,
     );
 
     // Step 3: Save pages to Firestore
@@ -131,7 +131,7 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
         pageNumber: page.pageNumber,
         text: page.text,
         sceneDescription: page.sceneDescription,
-        imageUrl: imageUrls[index],
+        imageUrl: pageUrls[index],
       });
     });
 
@@ -140,6 +140,7 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       title: story.title,
       status: 'complete',
       pageCount: story.pages.length,
+      characterReferenceUrls, // FC-013: persist character ref URLs (empty object when not used)
     });
 
     await batch.commit();
@@ -162,10 +163,11 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       writingStyle: input.writingStyle || null,
       artStyle,
       pageCount: story.pages.length,
+      characterReferenceUrls, // FC-013
       pages: story.pages.map((page, index) => ({
         pageNumber: page.pageNumber,
         text: page.text,
-        imageUrl: imageUrls[index],
+        imageUrl: pageUrls[index],
       })),
       generationTimeMs: elapsed,
     });
