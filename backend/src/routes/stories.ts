@@ -128,11 +128,17 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
 
     story.pages.forEach((page, index) => {
       const pageRef = storyRef.collection('pages').doc();
+      // FC-015: persist new optional overlay fields when present so the reader
+      // can render the Skia text layer. Conditional spreads keep absent fields
+      // out of Firestore (rather than writing undefined, which Firestore rejects).
       batch.set(pageRef, {
         pageNumber: page.pageNumber,
         text: page.text,
         sceneDescription: page.sceneDescription,
         imageUrl: pageUrls[index],
+        ...(page.textPosition ? { textPosition: page.textPosition } : {}),
+        ...(page.soundEffects && page.soundEffects.length > 0 ? { soundEffects: page.soundEffects } : {}),
+        ...(page.emphasizedWords && page.emphasizedWords.length > 0 ? { emphasizedWords: page.emphasizedWords } : {}),
       });
     });
 
@@ -173,6 +179,11 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
         pageNumber: page.pageNumber,
         text: page.text,
         imageUrl: pageUrls[index],
+        // FC-015: surface overlay metadata so the reader can render text on the
+        // very first generation response (before re-fetching from Firestore).
+        textPosition: page.textPosition ?? null,
+        soundEffects: page.soundEffects ?? null,
+        emphasizedWords: page.emphasizedWords ?? null,
       })),
       generationTimeMs: elapsed,
     });

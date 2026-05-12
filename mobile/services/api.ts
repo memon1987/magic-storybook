@@ -63,10 +63,34 @@ export interface StoryInput {
   artStyle?: ArtStyle;
 }
 
+// FC-015: where the narration overlay sits on each page. Server-provided per
+// page; absence (older stories) means "no overlay — text is baked in image".
+export type TextPosition = 'top' | 'bottom' | 'left' | 'right' | 'center-overlay';
+
+// FC-015: maps the writing-style picked at creation time to the font family
+// used to render the narration overlay. Keys mirror WritingStyleId. Adding a
+// new writing style requires also adding a font entry — `Record<WritingStyleId, …>`
+// makes tsc enforce that.
+export const WRITING_STYLE_FONT_MAP: Record<WritingStyleId, string> = {
+  'bouncy-rhymes':   'Baloo 2',
+  'gentle-refrains': 'Nunito',
+  'sweet-simple':    'Quicksand',
+};
+
+// Font family used for the narration overlay when the story has no
+// writingStyle set (legacy authorStyle path or older stories).
+export const DEFAULT_OVERLAY_FONT = 'Nunito';
+
 export interface StoryPage {
   pageNumber: number;
   text: string;
   imageUrl: string;
+  // FC-015: optional Skia overlay metadata. Pre-FC-015 pages omit these
+  // (server returns null on the wire); reader interprets absence as
+  // "no overlay — text is baked in image" and renders nothing on top.
+  textPosition?: TextPosition | null;
+  soundEffects?: string[] | null;
+  emphasizedWords?: string[] | null;
 }
 
 // FC-012: cover/title page data (separate from content pages).

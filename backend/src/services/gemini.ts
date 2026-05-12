@@ -8,6 +8,8 @@ import {
   CharacterVisualSheet,
   SettingVisualIdentity,
   TitlePage,
+  TextPosition,
+  TEXT_POSITIONS,
 } from '../types';
 import { buildStoryPrompt } from '../prompts/story';
 import { buildIllustrationPrompt } from '../prompts/illustration';
@@ -135,6 +137,49 @@ export async function generateStory(input: StoryInput): Promise<GeneratedStory> 
       if (!page.text || !page.sceneDescription) {
         throw new Error(`Invalid page ${index + 1}: missing text or sceneDescription`);
       }
+
+      // FC-015: validate optional overlay fields with graceful fallback so a
+      // single bad value doesn't abort the whole story.
+      //
+      // Review fix HIGH-1: default missing OR invalid textPosition to 'bottom'
+      // (NOT undefined). Without this, if Gemini omits the "MUST" field on a
+      // page (which happens occasionally under load), the FC-015 path produces
+      // an image with NO baked text AND the mobile overlay renders nothing —
+      // strictly worse than the pre-FC-015 baseline. A guaranteed default
+      // means every page always has visible narration.
+      if (page.textPosition === undefined || !TEXT_POSITIONS.includes(page.textPosition)) {
+        if (page.textPosition !== undefined) {
+          console.warn(`Page ${page.pageNumber}: invalid textPosition "${page.textPosition}", defaulting to "bottom"`);
+        } else {
+          console.warn(`Page ${page.pageNumber}: missing textPosition, defaulting to "bottom"`);
+        }
+        page.textPosition = 'bottom';
+      }
+      // Review fix MEDIUM-6: soundEffects are baked INTO the image as
+      // stylized words. Long entries trigger Gemini's known accuracy fall-off
+      // on long in-image text; >2 of them clutters the reserved-space
+      // contract. Cap length to 2 (matches story prompt) and reject entries
+      // longer than 12 chars (an "onomatopoeia" should be one word).
+      if (page.soundEffects !== undefined) {
+        if (!Array.isArray(page.soundEffects)) {
+          page.soundEffects = undefined;
+        } else {
+          page.soundEffects = page.soundEffects
+            .filter((w): w is string => typeof w === 'string' && w.trim().length > 0 && w.trim().length <= 12)
+            .slice(0, 2);
+          if (page.soundEffects.length === 0) page.soundEffects = undefined;
+        }
+      }
+      if (page.emphasizedWords !== undefined) {
+        if (!Array.isArray(page.emphasizedWords)) {
+          page.emphasizedWords = undefined;
+        } else {
+          page.emphasizedWords = page.emphasizedWords
+            .filter((w): w is string => typeof w === 'string' && w.trim().length > 0)
+            .slice(0, 4);
+          if (page.emphasizedWords.length === 0) page.emphasizedWords = undefined;
+        }
+      }
     });
 
     // Validate character sheets (graceful fallback if missing)
@@ -249,6 +294,8 @@ export async function generateIllustration(
   characterSheets?: CharacterVisualSheet[],
   settingIdentity?: SettingVisualIdentity,
   references: ReferenceImage[] = [],
+  textPosition?: TextPosition,
+  soundEffects?: string[],
 ): Promise<IllustrationResult> {
   const characterRefNames = references
     .filter((r) => r.type === 'character')
@@ -262,6 +309,8 @@ export async function generateIllustration(
     characterSheets,
     settingIdentity,
     characterRefNames,
+    textPosition,
+    soundEffects,
   );
 
   const contents = buildPageContents(references, promptText);
@@ -595,6 +644,9 @@ export async function generateAllIllustrations(
   }
 
   // ----- Step 2: generate page 1 (with character refs if available) -----
+  // FC-015: do NOT pass pageText anymore — narration is composed as a Skia
+  // overlay on the mobile reader. Pass textPosition + soundEffects so the
+  // illustrator reserves negative space at the right spot.
   console.log(`Step 2b: generating page ${firstPage.pageNumber} (page 1)...`);
   const firstResult = await generateIllustration(
     firstPage.sceneDescription,
@@ -602,10 +654,12 @@ export async function generateAllIllustrations(
     storyId,
     firstPage.pageNumber,
     style,
-    firstPage.text,
+    undefined, // FC-015: no pageText baked in
     story.characterSheets,
     story.settingIdentity,
     characterRefImages, // page 1 gets character refs but no setting ref (it IS the setting establishing shot)
+    firstPage.textPosition,
+    firstPage.soundEffects,
   );
 
   const results: Map<number, string> = new Map();
@@ -632,10 +686,12 @@ export async function generateAllIllustrations(
         storyId,
         page.pageNumber,
         style,
-        page.text,
+        undefined, // FC-015: no pageText baked in
         story.characterSheets,
         story.settingIdentity,
         pageReferences,
+        page.textPosition,
+        page.soundEffects,
       ),
     );
 

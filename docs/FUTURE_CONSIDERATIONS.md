@@ -152,6 +152,21 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
+### FC-015: Playful text placement (Skia text composition)
+
+**Status:** Plan published
+**Size estimate:** M-L
+**Owner:** Zeshan / Claude
+**Plan file:** `docs/plans/fc-015.md`
+
+**Problem / opportunity:** Story narration is currently baked into illustrations and pinned to a bottom band. Text feels static, ~10% of words are subtly mis-spelled by Gemini, and font choice can't match the writing-style picker (FC-014). Composing text *inside* the Skia canvas — in the same Group as the page image so the page-curl shader treats both as one surface — gives us pixel-perfect typography, varied placement, and zero spelling errors, without breaking the Apple Books-like pre-read affordance the curl was built for.
+
+**Open questions:**
+- Will Gemini actually vary `textPosition` across pages, or default to `top`/`bottom` reflexively?
+- SkParagraph word-wrap quality on long emphasis runs at landscape phone widths?
+
+---
+
 ## Completed
 
 ### FC-001: Frontend redesign (Figma v2) — Done 2026-04-24

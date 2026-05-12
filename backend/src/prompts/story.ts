@@ -162,6 +162,18 @@ SETTING VISUAL CONSISTENCY:
 - Specify the dominant color palette for the environment
 - These details anchor the reader in a single, coherent visual world
 
+TEXT PLACEMENT ON EACH PAGE (FC-015):
+- Each page object MUST include a "textPosition" field with ONE of these EXACT string values: "top", "bottom", "left", "right", or "center-overlay".
+- Choose textPosition based on where the focal character or main action sits on the page so the narration doesn't cover it:
+  - Focal subject lower-right → choose "top" or "left"
+  - Focal subject lower-left → choose "top" or "right"
+  - Wide, balanced scene with negative space at the bottom → "bottom" is fine
+  - Single emphatic short line on a moment of intensity → "center-overlay"
+  - VARY textPosition across the pages of a single story — don't pick "bottom" for every page; rotate placements so the book feels designed, not captioned.
+  - For "left" or "right": keep the page text short (about 15-25 words max) since the overlay zone is only ~40% of the canvas width.
+- Optional "soundEffects": array of 0-2 short single onomatopoeia words (e.g., "Whoosh!", "Splash!", "Boom!") that the illustrator will render in stylized lettering INSIDE the image near the relevant action. ONLY include sound effects on pages where they fit naturally — most pages should have an empty array or omit the field entirely. NEVER put narration sentences in soundEffects.
+- Optional "emphasizedWords": array of words pulled VERBATIM from this page's "text" string. The mobile reader will render these slightly larger and in an accent color in the text overlay. Pick at most 1-3 words per page (a key emotional or action word). Leave empty / omit if no word stands out.
+
 TITLE PAGE / COVER (FC-012):
 - Also produce a "titlePage" object — this is the book's cover, generated as a separate hero illustration.
 - titlePage.text: the on-cover display text. Always include the book's title (same value as the top-level "title" field). Optionally append " · Starring ${input.childName}" or a similar short attribution as a smaller secondary line — keep total cover text short (<= 60 characters) since Gemini's in-image text accuracy degrades on longer strings.
@@ -189,7 +201,10 @@ Return ONLY valid JSON with this exact structure (no markdown, no code blocks):
     {
       "pageNumber": 1,
       "text": "The story text that will appear on this page. Keep it simple and engaging for young readers.",
-      "sceneDescription": "Visual description for this specific page. Do NOT re-describe character appearances (those are in characterSheets). Instead describe: character poses, expressions, and positions; what action is happening; which setting elements are visible; any new objects unique to this page; the emotional mood."
+      "sceneDescription": "Visual description for this specific page. Do NOT re-describe character appearances (those are in characterSheets). Instead describe: character poses, expressions, and positions; what action is happening; which setting elements are visible; any new objects unique to this page; the emotional mood.",
+      "textPosition": "top",
+      "soundEffects": [],
+      "emphasizedWords": []
     }
   ]
 }
