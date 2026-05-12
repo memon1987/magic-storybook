@@ -1,4 +1,4 @@
-import { ArtStyle, CharacterVisualSheet, SettingVisualIdentity } from '../types';
+import { ArtStyle, CharacterVisualSheet, SettingVisualIdentity, TextPosition } from '../types';
 
 /**
  * Style descriptions for different art styles
@@ -13,6 +13,29 @@ const STYLE_DESCRIPTIONS: Record<ArtStyle, string> = {
 };
 
 /**
+ * FC-015: instructions for reserving negative space at the chosen text position.
+ * The mobile Skia overlay paints narration text into this reserved zone, so
+ * the illustrator's job is to keep that part of the image clean and uncluttered.
+ *
+ * Phrasing favors composition language ("low-detail negative space",
+ * "soft wash") rather than "leave a hole" — the latter consistently produced
+ * a literal blank rectangle from Gemini, which looks broken if the overlay
+ * fails to load.
+ */
+const TEXT_POSITION_RESERVATION: Record<TextPosition, string> = {
+  'top':
+    'Reserve the TOP ~22% of the page as low-detail negative space (open sky, soft cloud wash, gentle gradient, or quiet treetop foliage) so a typography overlay can sit there cleanly. Do NOT place the focal character or busy detail in that band.',
+  'bottom':
+    'Reserve the BOTTOM ~22% of the page as low-detail negative space (foreground grass, sand, water, or a soft warm wash) so a typography overlay can sit there cleanly. Do NOT place the focal character or busy detail in that band.',
+  'left':
+    'Reserve the LEFT ~30% of the page as low-detail negative space (open sky, distant softly washed background, foliage simplified to mood) so a typography overlay can sit there cleanly. Compose the focal character on the right two-thirds of the page.',
+  'right':
+    'Reserve the RIGHT ~30% of the page as low-detail negative space (open sky, distant softly washed background, foliage simplified to mood) so a typography overlay can sit there cleanly. Compose the focal character on the left two-thirds of the page.',
+  'center-overlay':
+    'Compose the scene normally, but ensure the CENTER of the page (roughly the middle third, both horizontally and vertically) is calm enough that a translucent typography card can sit on top of it without obscuring the focal character. Keep the focal character\'s face out of the dead center.',
+};
+
+/**
  * Build an illustration prompt for Gemini image generation
  * Features: character sheet consistency, clear text reading flow
  *
@@ -20,6 +43,17 @@ const STYLE_DESCRIPTIONS: Record<ArtStyle, string> = {
  * those character ref images as multimodal inputs (built by gemini.ts).
  * The prompt body explicitly numbers them so the model can correlate the
  * "Character reference 1: NAME" labels in `contents` with the prompt text.
+ *
+ * FC-015: there are now two mutually-exclusive text paths.
+ *   - LEGACY (`pageText` provided, `textPosition` undefined): bake narration
+ *     into the image at the bottom band. Used by stories generated before
+ *     FC-015 if they're ever regenerated.
+ *   - NEW (`textPosition` provided, `pageText` undefined): do NOT bake
+ *     narration. Reserve negative space at the chosen position so the mobile
+ *     reader can paint a Skia text overlay there. `soundEffects` (single
+ *     stylized words like "Boom!", "Splash!") may still be rendered IN the
+ *     image when present — these are short enough that Gemini handles them
+ *     reliably and they look intentional, not like spelling errors.
  */
 export function buildIllustrationPrompt(
   sceneDescription: string,
@@ -29,6 +63,8 @@ export function buildIllustrationPrompt(
   characterSheets?: CharacterVisualSheet[],
   settingIdentity?: SettingVisualIdentity,
   characterReferences?: Array<{ name: string }>,
+  textPosition?: TextPosition,
+  soundEffects?: string[],
 ): string {
   const styleDesc = STYLE_DESCRIPTIONS[style];
 
@@ -59,8 +95,37 @@ CONSISTENCY IS CRITICAL: The characters described above must look IDENTICAL on e
 ${settingIdentity.name}: ${settingIdentity.description}`
     : '';
 
-  // Text instructions: either embed with reading-flow layout, or no text
-  const textInstructions = pageText ? `
+  // FC-015: choose between legacy in-image text (when pageText is supplied and
+  // textPosition is NOT — old code path) vs new negative-space reservation
+  // (when textPosition is supplied — new path; narration is rendered as a
+  // Skia overlay on the mobile reader and must NOT be baked into the image).
+  let textInstructions: string;
+
+  if (textPosition) {
+    // NEW PATH: reserve negative space; narration will be overlaid by the app.
+    const reservation = TEXT_POSITION_RESERVATION[textPosition];
+    const soundEffectsBlock =
+      soundEffects && soundEffects.length > 0
+        ? `
+STYLIZED SOUND-EFFECT WORDS IN-IMAGE (FC-015):
+- Render ONLY these short stylized words IN the illustration near the relevant action: ${soundEffects.map((w) => `"${w}"`).join(', ')}
+- These are sound effects (e.g., "Boom!", "Splash!") — render them in expressive comic-style typography that fits the moment
+- Keep each word small-to-medium and complementary to the scene; never dominant
+- Do NOT add any other words. Do NOT add narration. Do NOT add labels, captions, or signs containing other text`
+        : `
+NO OTHER TEXT IN THE IMAGE (FC-015):
+- Do NOT render narration, captions, dialogue text, labels, signs, or letters of any kind in the illustration
+- The narrative text for this page is rendered separately as a typography overlay by the reader app — your image should contain ZERO words`;
+
+    textInstructions = `
+TEXT LAYOUT — RESERVE NEGATIVE SPACE FOR OVERLAY (FC-015):
+${reservation}
+
+The narrative text for this page is NOT baked into the image. The mobile reader composes it as a Skia typography overlay positioned exactly in the reserved zone above. Your job is to keep that zone clean and uncluttered so the overlay reads sharply.
+${soundEffectsBlock}`;
+  } else if (pageText) {
+    // LEGACY PATH: bake narration into the image at the bottom band.
+    textInstructions = `
 TEXT TO EMBED IN THE IMAGE (EXACT WORDS - DO NOT CHANGE):
 "${pageText}"
 
@@ -104,8 +169,37 @@ TEXT STYLING:
 - Consistent letter sizing for narrative text
 - High contrast between text color and background (dark text on light wash)
 - Large enough to be read comfortably on a phone screen
-- Text should feel like it belongs to the artwork but must prioritize readability` : `
+- Text should feel like it belongs to the artwork but must prioritize readability`;
+  } else {
+    textInstructions = `
 IMPORTANT: NO text, words, letters, or numbers in the image`;
+  }
+
+  // Composition guidance shifts depending on path:
+  //   - LEGACY (pageText baked in): keep the historical "TEXT ZONE / ILLUSTRATION ZONE" rule
+  //   - FC-015 (textPosition reserved): describe the reservation contract instead
+  //   - No-text fallback: just say "fully illustrated, no text zone"
+  let compositionBlock: string;
+  if (textPosition) {
+    compositionBlock = `COMPOSITION:
+- This is a FULL picture book page composed in landscape orientation
+- The narrative text overlay will be painted by the reader app at the position described in TEXT LAYOUT above — keep that zone calm and uncluttered
+- The illustration occupies the full page; the focal character/action belongs in the OPPOSITE region from the reserved text zone
+- Use a clear focal point (characters should be prominent)
+- Landscape orientation (wider than tall)`;
+  } else if (pageText) {
+    compositionBlock = `COMPOSITION:
+- This is a FULL picture book page with a clear TEXT ZONE and ILLUSTRATION ZONE
+- The text zone (bottom band) blends softly into the illustration through a gradient or soft wash
+- The illustration occupies the majority of the page (top ~75%)
+- Clear focal point (characters should be prominent)
+- Landscape orientation (wider than tall)`;
+  } else {
+    compositionBlock = `COMPOSITION:
+- Fully illustrated landscape page; no text zone
+- Clear focal point (characters should be prominent)
+- Landscape orientation (wider than tall)`;
+  }
 
   return `Create a ${styleDesc} children's picture book page.
 
@@ -120,7 +214,7 @@ ${textInstructions}
 VISUAL STYLE INFLUENCES:
 - Dr. Seuss: Imaginative shapes, whimsical settings, expressive characters
 - Pout-Pout Fish: Dreamy colors, expressive characters, immersive environments
-- Classic picture books: Text and art as ONE unified composition, with text in a clear readable zone
+- Classic picture books: text and art as ONE unified composition
 
 COLOR PALETTE:
 - Bright, saturated, joyful colors
@@ -128,12 +222,7 @@ COLOR PALETTE:
 - Warm undertones throughout
 - High contrast for visual interest and text readability
 
-COMPOSITION:
-- This is a FULL picture book page with a clear TEXT ZONE and ILLUSTRATION ZONE
-- The text zone (bottom band) blends softly into the illustration through a gradient or soft wash
-- The illustration occupies the majority of the page (top ~75%)
-- Clear focal point (characters should be prominent)
-- Landscape orientation (wider than tall)
+${compositionBlock}
 
 IMPORTANT CONSTRAINTS:
 - NO scary, dark, violent, or threatening elements
