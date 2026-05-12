@@ -3,6 +3,15 @@
     "version": ">= 15.0.0",
     "appVersionSource": "local"
   },
+  "submit": {
+    "production": {
+      "ios": {
+        "appleId": "zeshan@tkzmgroup.com",
+        "appleTeamId": "WM8Z5ZPBU8",
+        "ascAppId": "6768526865"
+      }
+    }
+  },
   "build": {
     "development": {
       "developmentClient": true,
