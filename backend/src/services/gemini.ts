@@ -139,20 +139,34 @@ export async function generateStory(input: StoryInput): Promise<GeneratedStory> 
       }
 
       // FC-015: validate optional overlay fields with graceful fallback so a
-      // single bad value doesn't abort the whole story. Out-of-enum
-      // textPosition is dropped (page falls back to bottom in the reader);
-      // arrays are normalized + capped at 4 entries to bound payload.
-      if (page.textPosition !== undefined && !TEXT_POSITIONS.includes(page.textPosition)) {
-        console.warn(`Page ${page.pageNumber}: invalid textPosition "${page.textPosition}", dropping`);
-        page.textPosition = undefined;
+      // single bad value doesn't abort the whole story.
+      //
+      // Review fix HIGH-1: default missing OR invalid textPosition to 'bottom'
+      // (NOT undefined). Without this, if Gemini omits the "MUST" field on a
+      // page (which happens occasionally under load), the FC-015 path produces
+      // an image with NO baked text AND the mobile overlay renders nothing —
+      // strictly worse than the pre-FC-015 baseline. A guaranteed default
+      // means every page always has visible narration.
+      if (page.textPosition === undefined || !TEXT_POSITIONS.includes(page.textPosition)) {
+        if (page.textPosition !== undefined) {
+          console.warn(`Page ${page.pageNumber}: invalid textPosition "${page.textPosition}", defaulting to "bottom"`);
+        } else {
+          console.warn(`Page ${page.pageNumber}: missing textPosition, defaulting to "bottom"`);
+        }
+        page.textPosition = 'bottom';
       }
+      // Review fix MEDIUM-6: soundEffects are baked INTO the image as
+      // stylized words. Long entries trigger Gemini's known accuracy fall-off
+      // on long in-image text; >2 of them clutters the reserved-space
+      // contract. Cap length to 2 (matches story prompt) and reject entries
+      // longer than 12 chars (an "onomatopoeia" should be one word).
       if (page.soundEffects !== undefined) {
         if (!Array.isArray(page.soundEffects)) {
           page.soundEffects = undefined;
         } else {
           page.soundEffects = page.soundEffects
-            .filter((w): w is string => typeof w === 'string' && w.trim().length > 0)
-            .slice(0, 4);
+            .filter((w): w is string => typeof w === 'string' && w.trim().length > 0 && w.trim().length <= 12)
+            .slice(0, 2);
           if (page.soundEffects.length === 0) page.soundEffects = undefined;
         }
       }

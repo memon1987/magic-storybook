@@ -152,8 +152,18 @@ export function Curl({
         <Canvas style={{ width, height }}>
           <Rect x={0} y={0} width={width} height={height} color="black" />
 
+          {/*
+            FC-015 review fix MEDIUM-4: fit="cover" (was "contain") so the
+            image fills the canvas with no letterbox bands. Otherwise the
+            negative-space text positions Gemini reserves inside the image
+            don't line up with the canvas-relative positions PageTextLayer
+            uses — bottom-band text would float on a black letterbox bar
+            instead of on the illustration's reserved zone. The story
+            prompt already asks for landscape with central focal subjects,
+            so cover-cropping the edges is acceptable.
+          */}
           {nextImage && (
-            <SkiaImage image={nextImage} rect={imageRect} fit="contain" />
+            <SkiaImage image={nextImage} rect={imageRect} fit="cover" />
           )}
           {/*
             FC-015: render the next page's text overlay with the underlay image
@@ -183,7 +193,7 @@ export function Curl({
                 }
                 transform={[{ scale: pd }]}
               >
-                <SkiaImage image={currentImage} rect={imageRect} fit="contain" />
+                <SkiaImage image={currentImage} rect={imageRect} fit="cover" />
                 {/*
                   FC-015: PageTextLayer lives INSIDE the curl Group so the curl
                   shader composites image + text into the offscreen layer FIRST
