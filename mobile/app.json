@@ -18,7 +18,8 @@
       "bundleIdentifier": "com.aistorybook.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "buildNumber": "3"
     },
     "android": {
       "adaptiveIcon": {
