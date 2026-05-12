@@ -162,10 +162,19 @@ SETTING VISUAL CONSISTENCY:
 - Specify the dominant color palette for the environment
 - These details anchor the reader in a single, coherent visual world
 
+TITLE PAGE / COVER (FC-012):
+- Also produce a "titlePage" object — this is the book's cover, generated as a separate hero illustration.
+- titlePage.text: the on-cover display text. Always include the book's title (same value as the top-level "title" field). Optionally append " · Starring ${input.childName}" or a similar short attribution as a smaller secondary line — keep total cover text short (<= 60 characters) since Gemini's in-image text accuracy degrades on longer strings.
+- titlePage.sceneDescription: a hero scene featuring the main characters in the book's signature setting, composed for a book cover (characters central, evocative pose, signature setting elements visible). Should capture the spirit of the book WITHOUT spoiling the ending. This will be illustrated as ONE landscape image, not a multi-page sequence.
+
 OUTPUT FORMAT:
 Return ONLY valid JSON with this exact structure (no markdown, no code blocks):
 {
   "title": "The Story Title",
+  "titlePage": {
+    "text": "The Story Title",
+    "sceneDescription": "Hero scene for the cover: characters central, evocative pose, signature setting elements visible. No spoilers."
+  },
   "characterSheets": [
     {
       "name": "Character Name",

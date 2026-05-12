@@ -15,7 +15,9 @@ interface StoryCardProps {
 
 export function StoryCard({ story, onPress, onLongPress, style }: StoryCardProps) {
   const { palette } = useTheme();
-  const coverUrl = story.pages?.[0]?.imageUrl;
+  // FC-012: prefer the dedicated cover image; fall back to pages[0] for stories
+  // generated before FC-012 shipped (which never got a titlePageImageUrl).
+  const coverUrl = story.titlePageImageUrl ?? story.pages?.[0]?.imageUrl;
 
   return (
     <AnimatedPressable

@@ -7,10 +7,12 @@ import {
   ArtStyle,
   CharacterVisualSheet,
   SettingVisualIdentity,
+  TitlePage,
 } from '../types';
 import { buildStoryPrompt } from '../prompts/story';
 import { buildIllustrationPrompt } from '../prompts/illustration';
 import { buildCharacterReferencePrompt } from '../prompts/characterReference';
+import { buildTitlePagePrompt } from '../prompts/titlePage';
 
 // Initialize Gemini client
 const ai = new GoogleGenAI({
@@ -145,6 +147,15 @@ export async function generateStory(input: StoryInput): Promise<GeneratedStory> 
     if (!story.settingIdentity || typeof story.settingIdentity !== 'object') {
       console.warn('Story generation did not include settingIdentity, using empty default');
       story.settingIdentity = { name: '', description: '' };
+    }
+
+    // FC-012: validate title page (graceful fallback — generateAllIllustrations
+    // will skip cover generation if this stays undefined, but log so we know).
+    if (!story.titlePage || !story.titlePage.text || !story.titlePage.sceneDescription) {
+      if (story.titlePage !== undefined) {
+        console.warn('Story generation produced incomplete titlePage, falling back to no cover');
+      }
+      story.titlePage = undefined;
     }
 
     // Sort pages by page number
@@ -408,11 +419,90 @@ export async function generateCharacterReference(
 }
 
 /**
- * Result from generating all illustrations (FC-013).
+ * FC-012: Generate the title-page (cover) image.
+ *
+ * Runs after character refs (so character refs can be attached as multimodal
+ * inputs) but before page 1 (so page 1 is unaffected if cover gen fails or
+ * the LLM omitted titlePage). Returns null on total failure — the route then
+ * persists the story without a titlePageImageUrl, and the library falls back
+ * to pages[0] for the thumbnail (same as pre-FC-012 behavior).
+ */
+export async function generateTitlePage(
+  titlePage: TitlePage,
+  storyId: string,
+  style: ArtStyle = 'watercolor',
+  characterReferences: ReferenceImage[] = [],
+): Promise<string | null> {
+  const characterRefNames = characterReferences
+    .filter((r) => r.type === 'character')
+    .map((r) => ({ name: r.name ?? 'unnamed' }));
+
+  const promptText = buildTitlePagePrompt(titlePage.text, titlePage.sceneDescription, style, characterRefNames);
+  const contents = buildPageContents(characterReferences, promptText);
+
+  const payloadBytes = JSON.stringify(contents).length;
+  console.log(
+    `Generating title page with ${IMAGE_MODEL} (with ${characterRefNames.length} character ref(s)) [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
+  );
+  const startTime = Date.now();
+
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: IMAGE_MODEL,
+        contents,
+        config: { responseModalities: ['IMAGE'] },
+      });
+
+      const elapsed = Date.now() - startTime;
+      console.log(`Title page generated in ${elapsed}ms (attempt ${attempt})`);
+
+      const parts = response.candidates?.[0]?.content?.parts || [];
+      let imageData: string | null = null;
+      let mimeType = 'image/png';
+      for (const part of parts) {
+        if (part.inlineData?.data) {
+          imageData = part.inlineData.data;
+          mimeType = part.inlineData.mimeType || 'image/png';
+          break;
+        }
+      }
+      if (!imageData) {
+        throw new Error('No image data in title page response');
+      }
+
+      const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
+      const filename = `stories/${storyId}/title-${uuid()}.${extension}`;
+      return await uploadGeneratedImage(imageData, mimeType, filename);
+    } catch (error) {
+      lastError = error;
+      if (isRetryableError(error) && attempt < MAX_RETRIES) {
+        const delayMs = jitteredBackoffMs(attempt);
+        console.log(`Title page: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
+        await sleep(delayMs);
+        continue;
+      }
+      console.error(`Failed to generate title page after ${attempt} attempts:`, error);
+      break;
+    }
+  }
+
+  // FC-012: title page failure does NOT degrade to a placehold.co URL — the
+  // library will fall back to pages[0] which is the next-best cover. Returning
+  // null lets the route persist no titlePageImageUrl and keep behavior parity
+  // with pre-FC-012 stories.
+  console.error(`All ${MAX_RETRIES} attempts failed for title page; last error:`, lastError);
+  return null;
+}
+
+/**
+ * Result from generating all illustrations (FC-013 + FC-012).
  */
 export interface AllIllustrationsResult {
   pageUrls: string[];
   characterReferenceUrls: Record<string, string>; // empty when characterSheets is empty
+  titlePageImageUrl: string | null;               // FC-012: null when titlePage absent or generation failed
 }
 
 /**
@@ -491,6 +581,19 @@ export async function generateAllIllustrations(
     console.log('Step 2a (FC-013): story has no named characters — skipping character reference stage');
   }
 
+  // ----- Step 1.5 (FC-012): generate title page (cover) ---------------------
+  // Sequential between character refs and page 1: needs character refs as
+  // multimodal inputs but doesn't need page 1 (the cover is its own scene).
+  // Failure is non-fatal — null titlePageImageUrl means the library falls
+  // back to pages[0] for the thumbnail, same as pre-FC-012 behavior.
+  let titlePageImageUrl: string | null = null;
+  if (story.titlePage) {
+    console.log(`Step 2a.5 (FC-012): generating title page with ${characterRefImages.length} character ref(s)...`);
+    titlePageImageUrl = await generateTitlePage(story.titlePage, storyId, style, characterRefImages);
+  } else {
+    console.log('Step 2a.5 (FC-012): story has no titlePage — skipping cover generation');
+  }
+
   // ----- Step 2: generate page 1 (with character refs if available) -----
   console.log(`Step 2b: generating page ${firstPage.pageNumber} (page 1)...`);
   const firstResult = await generateIllustration(
@@ -549,5 +652,5 @@ export async function generateAllIllustrations(
     `All ${story.pages.length} illustrations + ${Object.keys(characterReferenceUrls).length} character ref(s) generated in ${elapsed}ms`,
   );
 
-  return { pageUrls, characterReferenceUrls };
+  return { pageUrls, characterReferenceUrls, titlePageImageUrl };
 }

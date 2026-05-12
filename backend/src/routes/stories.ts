@@ -112,9 +112,9 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
     const storyInput: StoryInput = { ...input, favoriteAnimal };
     const story = await generateStory(storyInput);
 
-    // Step 2: Generate all illustrations (FC-013: includes per-character refs upfront)
+    // Step 2: Generate all illustrations (FC-013: per-character refs upfront; FC-012: title page)
     console.log('Step 2: Generating illustrations...');
-    const { pageUrls, characterReferenceUrls } = await generateAllIllustrations(
+    const { pageUrls, characterReferenceUrls, titlePageImageUrl } = await generateAllIllustrations(
       story,
       storyId,
       favoriteAnimal,
@@ -142,6 +142,8 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       status: 'complete',
       pageCount: story.pages.length,
       characterReferenceUrls, // FC-013: persist character ref URLs (empty object when not used)
+      ...(story.titlePage ? { titlePage: story.titlePage } : {}),                      // FC-012
+      ...(titlePageImageUrl ? { titlePageImageUrl } : {}),                              // FC-012
     });
 
     await batch.commit();
@@ -165,6 +167,8 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       artStyle,
       pageCount: story.pages.length,
       characterReferenceUrls, // FC-013
+      titlePage: story.titlePage || null,            // FC-012
+      titlePageImageUrl: titlePageImageUrl || null,  // FC-012
       pages: story.pages.map((page, index) => ({
         pageNumber: page.pageNumber,
         text: page.text,
