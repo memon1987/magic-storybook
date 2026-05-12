@@ -152,21 +152,6 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
-### FC-015: Playful text placement (Skia text composition)
-
-**Status:** Plan published
-**Size estimate:** M-L
-**Owner:** Zeshan / Claude
-**Plan file:** `docs/plans/fc-015.md`
-
-**Problem / opportunity:** Story narration is currently baked into illustrations and pinned to a bottom band. Text feels static, ~10% of words are subtly mis-spelled by Gemini, and font choice can't match the writing-style picker (FC-014). Composing text *inside* the Skia canvas — in the same Group as the page image so the page-curl shader treats both as one surface — gives us pixel-perfect typography, varied placement, and zero spelling errors, without breaking the Apple Books-like pre-read affordance the curl was built for.
-
-**Open questions:**
-- Will Gemini actually vary `textPosition` across pages, or default to `top`/`bottom` reflexively?
-- SkParagraph word-wrap quality on long emphasis runs at landscape phone widths?
-
----
-
 ## Completed
 
 ### FC-001: Frontend redesign (Figma v2) — Done 2026-04-24
@@ -211,6 +196,13 @@ Added a new pipeline stage that generates one model-sheet reference image per na
 
 - **Plan:** [docs/plans/fc-013.md](plans/fc-013.md) (adversarial peer review caught 3 HIGH issues including thundering-herd retries and placehold.co URL leakage; all fixed before merge)
 - **PR:** [#7](https://github.com/memon1987/ai-storybook-app/pull/7) (squash-merged as `5f86a8f`)
+
+### FC-015: Playful text placement (Skia text composition) — Done 2026-05-12
+
+Replaced narration-baked-into-illustration with text composed inside the Skia canvas. The narration overlay lives in the same `<Group layer={Paint with RuntimeShader}>` that the page-curl shader operates on, so the curl deforms image+text as one composite — no fade hack, no coordinate translation, real fonts, zero spelling errors. Per-page LLM-chosen `textPosition` (`top` / `bottom` / `left` / `right` / `center-overlay`); writing style picks the font (Bouncy → Baloo 2, Gentle → Nunito, Sweet & Simple → Quicksand). Optional `soundEffects[]` are short stylized words still rendered in-image; optional `emphasizedWords[]` are highlighted in the overlay. Backwards-compatible: pre-FC-015 stories' baked-in text still shows through.
+
+- **Plan:** [docs/plans/fc-015.md](plans/fc-015.md) (adversarial peer review caught 2 HIGH issues — Gemini occasionally drops `textPosition` triggering a textless page; uncaught Skia paragraph throws crashing the reader — plus 4 MEDIUM; all fixed before merge; confirmation review APPROVE-MERGE)
+- **PR:** [#9](https://github.com/memon1987/ai-storybook-app/pull/9) (squash-merged as `262c230`)
 
 ### FC-012: Title page generation — Done 2026-05-11
 
