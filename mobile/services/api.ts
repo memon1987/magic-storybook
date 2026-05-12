@@ -69,6 +69,12 @@ export interface StoryPage {
   imageUrl: string;
 }
 
+// FC-012: cover/title page data (separate from content pages).
+export interface StoryTitlePage {
+  text: string;
+  sceneDescription: string;
+}
+
 export interface Story {
   id: string;
   title: string;
@@ -84,6 +90,10 @@ export interface Story {
   artStyle: ArtStyle;
   pageCount: number;
   pages?: StoryPage[];
+  // FC-012: cover image + cover scene description, distinct from content pages.
+  // Optional for backwards-compatibility with stories generated pre-FC-012.
+  titlePageImageUrl?: string;
+  titlePage?: StoryTitlePage;
   createdAt: string;
 }
 

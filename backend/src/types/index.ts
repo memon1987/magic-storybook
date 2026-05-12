@@ -34,6 +34,14 @@ export interface StoryPage {
   sceneDescription: string;
 }
 
+// FC-012: title page (cover) — distinct from content pages.
+// `text` is the on-cover display text (book title, optionally "Starring X").
+// `sceneDescription` is what the illustrator generates as the cover scene.
+export interface TitlePage {
+  text: string;
+  sceneDescription: string;
+}
+
 // Character visual reference for cross-page consistency
 export interface CharacterVisualSheet {
   name: string;
@@ -52,6 +60,10 @@ export interface GeneratedStory {
   characterSheets: CharacterVisualSheet[];
   settingIdentity: SettingVisualIdentity;
   pages: StoryPage[];
+  // FC-012: cover page produced alongside the story (text + scene). Image URL
+  // is populated separately by generateAllIllustrations and surfaced as
+  // titlePageImageUrl on the story document, NOT inside pages[].
+  titlePage?: TitlePage;
   // FC-013: per-character reference image URLs (key = character name, value = Cloud Storage public URL).
   // Populated by generateAllIllustrations after the new pipeline runs.
   characterReferenceUrls?: Record<string, string>;
@@ -81,6 +93,8 @@ export interface StoryDocument {
   status: 'pending' | 'generating' | 'complete' | 'failed';
   pageCount?: number;
   characterReferenceUrls?: Record<string, string>;  // FC-013
+  titlePage?: TitlePage;                            // FC-012
+  titlePageImageUrl?: string;                       // FC-012 (Cloud Storage URL)
   createdAt: FirebaseFirestore.Timestamp;
 }
 

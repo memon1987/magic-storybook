@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -47,7 +47,22 @@ export default function ReadScreen() {
     enabled: !!id,
   });
 
-  const pages: StoryPage[] = story?.pages ?? [];
+  // FC-012: prepend the cover (title page) as page 0 when present. Older
+  // stories without titlePageImageUrl render unchanged. We synthesize a
+  // StoryPage so the existing render iteration / dot indicator / page-curl
+  // logic doesn't need to learn about a separate cover concept.
+  const pages: StoryPage[] = useMemo(() => {
+    const contentPages = story?.pages ?? [];
+    if (story?.titlePageImageUrl) {
+      const coverPage: StoryPage = {
+        pageNumber: 0,
+        text: story.titlePage?.text ?? story.title ?? '',
+        imageUrl: story.titlePageImageUrl,
+      };
+      return [coverPage, ...contentPages];
+    }
+    return contentPages;
+  }, [story?.titlePageImageUrl, story?.titlePage?.text, story?.title, story?.pages]);
   const isLastPage = pages.length > 0 && currentPage === pages.length - 1;
   const isPortrait = orientation === ScreenOrientation.Orientation.PORTRAIT_UP
     || orientation === ScreenOrientation.Orientation.PORTRAIT_DOWN

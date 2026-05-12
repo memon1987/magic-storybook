@@ -136,6 +136,20 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
+### FC-012: Title page generation
+
+**Status:** Plan published
+**Size estimate:** S-M
+**Owner:** Zeshan
+**Plan file:** `docs/plans/fc-012.md`
+
+**Problem / opportunity:** Stories currently have no cover. The library's `StoryCard` uses `pages?.[0]?.imageUrl` as the thumbnail — which is whatever the first content page happens to look like. Generate a dedicated title page (using FC-013 character refs for visual consistency with the rest of the book) that becomes pages[0] and serves as the library cover.
+
+**Open questions:**
+- None — plan is published.
+
+---
+
 ### FC-010: Parent dashboard & reading analytics
 
 **Status:** Consideration
