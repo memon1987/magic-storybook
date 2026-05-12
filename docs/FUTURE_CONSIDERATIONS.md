@@ -152,6 +152,39 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
+### FC-016: Story generation latency reduction (deep research)
+
+**Status:** Consideration
+**Size estimate:** M-L (research first, then implementation)
+**Owner:** unassigned
+**Plan file:** not yet (research must precede a plan)
+
+**Problem / opportunity:** Total story generation time is 3-5 min for a medium (6-page) story under the FC-013 + FC-012 + FC-015 pipeline (~200-260s typical, longer on Gemini tail latency). The parent overhaul plan accepted this as a real UX cost; with the app live, it's worth investigating whether the post-FC-013 architecture lets us reclaim some of that time.
+
+**Hypothesis to investigate (per user 2026-05-12):** with FC-013's per-character reference image framework in place, we may be able to parallelize MORE of the per-page generation than we currently do. Today's pipeline runs:
+
+```
+[story text] → [N char refs in parallel] → [title page] → [page 1] → [pages 2..N in parallel]
+```
+
+The serial bottleneck is `title page → page 1 → pages 2..N` because pages 2..N consume `page 1` as a setting reference. If character refs alone are sufficient to anchor consistency, we could potentially:
+
+1. **Generate title page + page 1 in parallel** (both need only char refs, currently sequential — frees ~12-30s)
+2. **Generate ALL content pages 1..N in parallel** using just char refs (no page-1 setting ref) — frees the entire page-1 wait (~12-30s, plus simplifies the dep graph)
+3. **Combinations of 1 and 2**, plus possibly batched multi-image API calls if Gemini exposes one
+
+**Open questions:**
+- Does dropping the page-1 setting reference materially regress visual consistency across pages? (Need A/B comparison: char refs only vs char refs + page-1 setting ref.)
+- Does Gemini Nano Banana 2 expose a batched / streaming API that's cheaper than N parallel `generateContent` calls?
+- What's the actual end-to-end latency distribution today (p50, p95, p99) across the last N stories? (Need to instrument before optimizing.)
+- Are there Cloud Run cold-start contributions worth chasing separately (min instances, concurrency tuning)?
+- For long stories (8+ pages), is the bottleneck hitting Gemini's per-account QPS limit instead of any single call? (Would require backoff strategy changes, not parallelism changes.)
+- If we drop the setting ref, do we need a different consistency mechanism for environmental details (recurring landmarks, color palette) that the page-1 ref currently provides for free?
+
+**Why deep research first:** the parent plan's FC-013 work has retroactively documented latency baselines in `docs/investigations/fc-002-latency-benchmark-2026-04-28.md`. Repeating that methodology with the post-FC-015 pipeline (capture p50/p95 across 5+ stories on each candidate variant) gives us evidence for "is the latency cost worth it" instead of speculation.
+
+---
+
 ## Completed
 
 ### FC-001: Frontend redesign (Figma v2) — Done 2026-04-24
