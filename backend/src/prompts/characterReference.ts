@@ -18,10 +18,10 @@ const STYLE_DESCRIPTIONS: Record<ArtStyle, string> = {
  * Build a character "model sheet" reference image prompt for FC-013.
  *
  * The output is a clean reference image showing one character in 3 poses
- * (front, three-quarter, action) on a plain white background, with the
- * character's name labeled beneath the figures. This image is then passed as
- * a multimodal reference to every page generation in the story so the model
- * has a stable visual anchor for the character's appearance across pages.
+ * (front, three-quarter, action) on a plain white background. This image is
+ * passed as a multimodal reference to every page generation in the story so
+ * the model has a stable visual anchor for the character's appearance across
+ * pages.
  *
  * Deliberate constraints:
  *  - No scene context (no setting, no other characters, no props beyond what
@@ -30,8 +30,11 @@ const STYLE_DESCRIPTIONS: Record<ArtStyle, string> = {
  *    studios for character bibles)
  *  - Same art style as the book's pages (so the character looks "from the same
  *    book" when the model later generates story pages)
- *  - Name label only — no other text (the page-generation prompts will refer
- *    to the character by name and need the name visible in the reference)
+ *  - NO text or labels of any kind. (Earlier versions asked for a name label
+ *    beneath the figures, but Gemini's text-rendering accuracy on multi-word
+ *    names was poor and the misspelled labels added noise to the reference
+ *    image. Page-generation prompts address characters by name in the prompt
+ *    body; they don't need to read the name off the multimodal image.)
  */
 export function buildCharacterReferencePrompt(
   name: string,
