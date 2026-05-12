@@ -136,20 +136,6 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
-### FC-012: Title page generation
-
-**Status:** Plan published
-**Size estimate:** S-M
-**Owner:** Zeshan
-**Plan file:** `docs/plans/fc-012.md`
-
-**Problem / opportunity:** Stories currently have no cover. The library's `StoryCard` uses `pages?.[0]?.imageUrl` as the thumbnail — which is whatever the first content page happens to look like. Generate a dedicated title page (using FC-013 character refs for visual consistency with the rest of the book) that becomes pages[0] and serves as the library cover.
-
-**Open questions:**
-- None — plan is published.
-
----
-
 ### FC-010: Parent dashboard & reading analytics
 
 **Status:** Consideration
@@ -210,3 +196,10 @@ Added a new pipeline stage that generates one model-sheet reference image per na
 
 - **Plan:** [docs/plans/fc-013.md](plans/fc-013.md) (adversarial peer review caught 3 HIGH issues including thundering-herd retries and placehold.co URL leakage; all fixed before merge)
 - **PR:** [#7](https://github.com/memon1987/ai-storybook-app/pull/7) (squash-merged as `5f86a8f`)
+
+### FC-012: Title page generation — Done 2026-05-11
+
+Adds a dedicated cover image to every story, generated after FC-013's character refs (so cover characters match in-book characters). Surfaced via separate `titlePageImageUrl` + `titlePage` fields on the story (Option 2; cleaner than the parent plan's pages[0] sentinel). Library StoryCard uses it as the thumbnail; reader prepends it as a synthesized page-0 with "Cover" label.
+
+- **Plan:** [docs/plans/fc-012.md](plans/fc-012.md) (Option-2 deviation documented; first adversarial review attempt stalled at watchdog, tighter retry returned APPROVE with only LOW nits)
+- **PR:** [#8](https://github.com/memon1987/ai-storybook-app/pull/8) (squash-merged as `3610bac`)
