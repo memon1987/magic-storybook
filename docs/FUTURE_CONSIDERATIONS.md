@@ -152,6 +152,41 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
+### FC-017: Story generation reliability — request resumes / async job model
+
+**Status:** Consideration
+**Size estimate:** L (likely architecture refactor)
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** Today story generation is a single synchronous HTTP request that runs for 3-5 minutes (FC-013 + FC-012 + FC-015 pipeline). Real failure observed 2026-05-12: ~9.5 min into a request, the Cloud Run instance handling it died (likely cascading from a `TypeError: fetch failed sending request` blip between Cloud Run and Gemini API while generating a character reference). The request was ~80% done — had story text, 1 of 2 char refs, title page; was mid page-1 generation. A new Cloud Run instance booted but did NOT pick up the orphaned request. Mobile client (10 min HTTP timeout) just waited until timeout, then surfaced a generic failure to the user. **80%+ of the work was already paid for and got thrown away.**
+
+This isn't a one-off — any 3-5 min synchronous request is fragile by definition under autoscaling, instance restarts, network blips, or Cloud Run cold-eviction policies.
+
+**Open questions:**
+
+*Architecture:*
+- Should story generation move to an **async job model**? Mobile client POSTs job → gets a job ID immediately → polls a status endpoint (or subscribes to Firestore doc updates, since we already use Firestore). Backend runs the job as a Cloud Run background task or Cloud Tasks-triggered worker, with the job state persisted to Firestore at every step so a crashed instance can resume from the last persisted phase.
+- If async: where does the worker run? Same Cloud Run service with a `?background=true` route? Separate Cloud Run service? Cloud Tasks → Cloud Run? Cloud Functions?
+- For the resume case specifically: persist intermediate artifacts (char ref URLs, title page URL, completed page URLs) to Firestore on each phase boundary. A resumed worker reads what's done and only generates what's missing.
+
+*UX / mobile client:*
+- During the 3-5 min wait, does the user see anything more than a spinner? Even a "Generating page 3 of 6..." progress indicator would massively reduce the abandon rate. Trivial to wire up if we have a status endpoint.
+- On client-side timeout, can we surface a "Resume in background — we'll notify you when done" instead of a hard error?
+
+*Reliability:*
+- Why did the Cloud Run instance die? Investigation needed. Candidates: OOM (multimodal image payloads are 600KB+ each, parallel generation × N pages could spike memory), connection pool exhaustion, Cloud Run's own kill signals during scale-down.
+- Should char-ref retries have circuit-breaker behavior so 3 fails on one ref don't take down the instance with stuck connections?
+- Logging gap: when an instance dies, we lose which request it was handling. Add a final orphan-request sweep that marks pending Firestore docs as failed after N minutes of no progress.
+
+*Cost / footprint:*
+- An async job model adds ~30 sec polling overhead per story. Acceptable trade-off vs the current "all-or-nothing 5-min synchronous request"?
+- Cloud Run min-instances=1 would prevent cold starts but adds ~$15/mo. Worth it once usage justifies?
+
+**Investigation needed before any plan:** root-cause the 2026-05-12 instance death (Cloud Run instance metrics + memory profile during a story generation). Without knowing whether instances die from OOM vs network vs scaledown, we'd be solving the wrong layer.
+
+---
+
 ### FC-016: Story generation latency reduction (deep research)
 
 **Status:** Consideration
