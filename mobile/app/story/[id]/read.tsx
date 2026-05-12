@@ -51,6 +51,7 @@ export default function ReadScreen() {
   // stories without titlePageImageUrl render unchanged. We synthesize a
   // StoryPage so the existing render iteration / dot indicator / page-curl
   // logic doesn't need to learn about a separate cover concept.
+  const hasCover = !!story?.titlePageImageUrl;
   const pages: StoryPage[] = useMemo(() => {
     const contentPages = story?.pages ?? [];
     if (story?.titlePageImageUrl) {
@@ -218,7 +219,9 @@ export default function ReadScreen() {
             ))}
           </View>
           <Text style={styles.pageCounter}>
-            {currentPage + 1} / {pages.length}
+            {hasCover && currentPage === 0
+              ? 'Cover'
+              : `${currentPage + (hasCover ? 0 : 1)} / ${pages.length - (hasCover ? 1 : 0)}`}
           </Text>
         </Animated.View>
       )}
