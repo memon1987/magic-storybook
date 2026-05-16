@@ -30,6 +30,13 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
+      # FC-019 review fix HIGH-2: pin request timeout. Story generation already
+      # runs up to ~5 min (FC-013/12/15 pipeline); the FC-019 spike route can
+      # take ~3-6 min (2× sequential image-gen pass). Cloud Run's default
+      # timeout is 300s. Without --timeout pinned, a fresh deploy that
+      # creates the service would inherit the 300s default and break both
+      # production story-gen and the spike route. 3600s = 60 min upper bound.
+      - '--timeout=3600'
 
 options:
   logging: CLOUD_LOGGING_ONLY

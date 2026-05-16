@@ -34,6 +34,10 @@ const bucket = storage.bucket(bucketName);
 //   User override of FC-002; full benchmark plan deferred.
 const TEXT_MODEL = 'gemini-3-flash-preview';
 const IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
+// FC-019: Pro Image model used by `generateIllustrationPro` for the spike.
+// ~94-96% text accuracy with multi-line support; ~2× cost; Google's forward
+// image lane (Imagen 4 is being deprecated June 2026 per Google docs).
+const IMAGE_MODEL_PRO = 'gemini-3-pro-image-preview';
 
 // Retry configuration for handling 503 Service Unavailable errors
 const MAX_RETRIES = 3;
@@ -383,6 +387,109 @@ export async function generateIllustration(
 
   console.error(`All ${MAX_RETRIES} attempts failed for page ${pageNumber}; last error:`, lastError);
   return { publicUrl: `https://placehold.co/800x600/png?text=Page+${pageNumber}`, imageBase64: null, mimeType: 'image/png' };
+}
+
+/**
+ * FC-019 spike: Pro Image variant of `generateIllustration` that bakes the
+ * narration text INTO the image (legacy pre-FC-015 path) using the higher-
+ * accuracy `gemini-3-pro-image-preview` model (~94-96% text accuracy with
+ * multi-line support, vs Flash's ~90% on short strings).
+ *
+ * Forces the `pageText` branch of `buildIllustrationPrompt` (text baked in)
+ * and OMITS `textPosition` / `soundEffects` (those reserve negative space
+ * for the Skia overlay — incompatible with text-in-image). Character
+ * references are passed through unchanged so character consistency is
+ * still anchored by FC-013's multimodal refs.
+ *
+ * Output is uploaded to `stories/{id}/spike-pro/page-N-...` so it doesn't
+ * collide with the production pipeline's `stories/{id}/page-N-...` paths.
+ * Returns the same shape as `generateIllustration` for spike-route compat.
+ */
+export async function generateIllustrationPro(
+  sceneDescription: string,
+  animalType: string,
+  storyId: string,
+  pageNumber: number,
+  pageText: string,
+  style: ArtStyle = 'watercolor',
+  characterSheets?: CharacterVisualSheet[],
+  settingIdentity?: SettingVisualIdentity,
+  references: ReferenceImage[] = [],
+): Promise<IllustrationResult> {
+  const characterRefNames = references
+    .filter((r) => r.type === 'character')
+    .map((r) => ({ name: r.name ?? 'unnamed' }));
+
+  // Force legacy text-in-image path: pageText defined, textPosition undefined.
+  const promptText = buildIllustrationPrompt(
+    sceneDescription,
+    animalType,
+    style,
+    pageText,
+    characterSheets,
+    settingIdentity,
+    characterRefNames,
+    /* textPosition */ undefined,
+    /* soundEffects */ undefined,
+  );
+
+  const contents = buildPageContents(references, promptText);
+  const payloadBytes = JSON.stringify(contents).length;
+  const refSummary =
+    references.length === 0
+      ? ''
+      : ` (with ${references.filter((r) => r.type === 'character').length} character ref(s)${references.some((r) => r.type === 'setting') ? ' + setting ref' : ''})`;
+  console.log(
+    `[SPIKE-PRO] Generating illustration for page ${pageNumber} with ${IMAGE_MODEL_PRO}${refSummary} [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
+  );
+  const startTime = Date.now();
+
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: IMAGE_MODEL_PRO,
+        contents,
+        config: { responseModalities: ['IMAGE'] },
+      });
+
+      const elapsed = Date.now() - startTime;
+      console.log(`[SPIKE-PRO] Illustration for page ${pageNumber} generated in ${elapsed}ms (attempt ${attempt})`);
+
+      const parts = response.candidates?.[0]?.content?.parts || [];
+      let imageData: string | null = null;
+      let mimeType = 'image/png';
+      for (const part of parts) {
+        if (part.inlineData?.data) {
+          imageData = part.inlineData.data;
+          mimeType = part.inlineData.mimeType || 'image/png';
+          break;
+        }
+      }
+      if (!imageData) {
+        throw new Error('No image data in Pro generation response');
+      }
+
+      const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
+      const filename = `stories/${storyId}/spike-pro/page-${pageNumber}-${uuid()}.${extension}`;
+      const publicUrl = await uploadGeneratedImage(imageData, mimeType, filename);
+      return { publicUrl, imageBase64: imageData, mimeType };
+    } catch (error) {
+      lastError = error;
+      if (isRetryableError(error) && attempt < MAX_RETRIES) {
+        const delayMs = jitteredBackoffMs(attempt);
+        console.log(`[SPIKE-PRO] Page ${pageNumber}: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
+        await sleep(delayMs);
+        continue;
+      }
+      console.error(`[SPIKE-PRO] Failed to generate page ${pageNumber} after ${attempt} attempts:`, error);
+      break;
+    }
+  }
+
+  console.error(`[SPIKE-PRO] All ${MAX_RETRIES} attempts failed for page ${pageNumber}; last error:`, lastError);
+  return { publicUrl: `https://placehold.co/800x600/png?text=SPIKE-PRO+Failed+Page+${pageNumber}`, imageBase64: null, mimeType: 'image/png' };
 }
 
 /**
