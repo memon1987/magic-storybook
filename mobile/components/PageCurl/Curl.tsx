@@ -46,7 +46,10 @@ interface CurlProps {
   fontMgr?: SkTypefaceFontProvider | null;
   textColor?: string;
   accentColor?: string;
-  backingColor?: string;
+  // FC-018: warm halo color (replaces backingColor). Used for the radial-
+  // gradient halo behind center-overlay text + the warm-tint shadow on all
+  // overlay text. Must be #RRGGBB (no alpha); alpha is added internally.
+  haloColor?: string;
 }
 
 const CORNER_RADIUS = 0;
@@ -68,7 +71,7 @@ export function Curl({
   fontMgr,
   textColor,
   accentColor,
-  backingColor,
+  haloColor,
 }: CurlProps) {
   const pd = PixelRatio.get();
 
@@ -139,12 +142,14 @@ export function Curl({
 
   const imageRect = useMemo(() => Skia.XYWHRect(0, 0, width, height), [width, height]);
 
-  // FC-015: defaults for the overlay colors when the parent doesn't pass them
-  // explicitly. These are intentionally generic so the legacy code path (no
-  // PageTextLayer rendered because no textPosition) is never affected.
+  // FC-015 / FC-018: defaults for the overlay colors when the parent doesn't
+  // pass them explicitly. These are intentionally generic so the legacy code
+  // path (no PageTextLayer rendered because no textPosition) is never affected.
+  // haloColor default is a warm cream (matches the `magical` palette's
+  // haloColor); callers should pass the active palette's haloColor explicitly.
   const resolvedTextColor = textColor ?? '#2D2D2D';
   const resolvedAccentColor = accentColor ?? '#FF6B6B';
-  const resolvedBackingColor = backingColor ?? 'rgba(255,249,232,0.86)';
+  const resolvedHaloColor = haloColor ?? '#FFF4D6';
 
   return (
     <GestureDetector gesture={composed}>
@@ -178,7 +183,7 @@ export function Curl({
               width={width}
               height={height}
               accentColor={resolvedAccentColor}
-              backingColor={resolvedBackingColor}
+              haloColor={resolvedHaloColor}
               textColor={resolvedTextColor}
             />
           )}
@@ -207,7 +212,7 @@ export function Curl({
                   width={width}
                   height={height}
                   accentColor={resolvedAccentColor}
-                  backingColor={resolvedBackingColor}
+                  haloColor={resolvedHaloColor}
                   textColor={resolvedTextColor}
                 />
               </Group>
