@@ -54,9 +54,34 @@ URLs: `stories/79555bf6-…/spike-pro/page-{1..4}-*.jpg`
 - Run 2 (after dropping the style param, V4 prompt-only): generated, but **flat/un-playful art + complete character drift across pages** — expected, because V4 has no mechanism to anchor either style or characters. This run is discarded as non-representative per the research finding above.
 - Latency on the successful V4 prompt-only run: ~76 s for 4 pages (17–21 s/page, very consistent — no tail spikes). Cost basis at the time assumed V4 quality tier (~$0.25/img).
 
-### Variant C — Recraft V3 + custom style from FC-013 char refs ⏳ PENDING
+### Variant C — Recraft V3 + custom style from FC-013 char refs ✅ (fair run, 2026-05-16)
 
-Implementation complete (this PR): the spike now (1) loads the story's persisted FC-013 character reference model-sheets, (2) calls `POST /v1/styles` once to mint a `style_id` from them (`createRecraftStyle`), (3) passes that `style_id` + `model: recraftv3` to every page. `styleNote` in the response records whether the fair path (custom style) or the unfair fallback (prompt-only) was used, so the comparison can never be silently mis-attributed. Cost basis corrected to V3 raster (~$0.04/img — ~6× cheaper than the V4 quality tier, and cheaper than Flash). **Re-run results to be appended here.**
+`styleNote`: **custom style `f35f7370-2acd-4995-82a2-00e487204b7a` from 2 char ref(s)** — the fair path executed (style minted from Bubba + Hubba FC-013 model-sheets, applied to all 4 pages via `style_id`).
+
+| Page | Latency |
+|---|---|
+| style creation | included in total |
+| 1 | 18.7 s |
+| 2 | 9.8 s |
+| 3 | 8.3 s |
+| 4 | 9.9 s |
+| **Total** | **47.3 s** for style + 4 pages |
+| **Cost** | **$0.16** ($0.04/img — *cheaper than Flash's $0.067*) |
+
+URLs: `stories/79555bf6-…/spike-recraft/page-{1..4}-*.png` (run 2026-05-16, the `f1de4f36 / 07a14d9b / 2990895b / 760b7aa9` set — supersedes all earlier `spike-recraft/` outputs which were the discarded unfair V4 runs).
+
+### Head-to-head (4-page story)
+
+| | A: Flash + Skia overlay | B: Gemini 3 Pro (text-in-image) | C: Recraft V3 + custom style |
+|---|---|---|---|
+| Text accuracy | 100% (Skia) | ~94-96% (model) | ~elite (V3 #1 long-text 5mo) |
+| Text feel | overlay (user-rejected) | baked, author-like | baked, author-like |
+| Char consistency | n/a (refs anchor art) | FC-013 multimodal refs | FC-013 refs → custom style |
+| Latency (4pg, sequential) | baseline | **190 s** (one 103 s tail) | **47 s** (no tail spikes) |
+| Cost (4pg) | $0.27 full pipeline | **$0.536** | **$0.16** |
+| Vendor | Google | Google | Recraft (new dep) |
+
+**C is 4× faster and 3× cheaper than B.** Visual quality (playfulness, char consistency, "author-made" feel) is the user's call — pending review of the fair V3 URLs vs the Pro URLs vs the sim's Skia-overlay reader.
 
 ## Decision criteria (committed pre-spike, unchanged)
 
