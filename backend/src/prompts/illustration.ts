@@ -17,22 +17,27 @@ const STYLE_DESCRIPTIONS: Record<ArtStyle, string> = {
  * The mobile Skia overlay paints narration text into this reserved zone, so
  * the illustrator's job is to keep that part of the image clean and uncluttered.
  *
- * Phrasing favors composition language ("low-detail negative space",
- * "soft wash") rather than "leave a hole" — the latter consistently produced
- * a literal blank rectangle from Gemini, which looks broken if the overlay
- * fails to load.
+ * FC-018: tightened with explicit negative constraints. Earlier soft phrasing
+ * ("low-detail negative space", "soft wash") still occasionally caused Gemini
+ * to paint a literal white rectangle — the very artifact the Skia overlay
+ * replaces, now showing up baked in the image. Each entry now includes:
+ *   1. A concrete organic example of what the reservation should look like
+ *      ("treat the top 22% as open sky with no characters, no clouds...")
+ *   2. An explicit NEGATIVE constraint enumerating the bad outcomes (literal
+ *      box, banner, panel, solid color block).
+ *   3. Framing as a *compositional choice*, not a *graphic element*.
  */
 const TEXT_POSITION_RESERVATION: Record<TextPosition, string> = {
   'top':
-    'Reserve the TOP ~22% of the page as low-detail negative space (open sky, soft cloud wash, gentle gradient, or quiet treetop foliage) so a typography overlay can sit there cleanly. Do NOT place the focal character or busy detail in that band.',
+    'Reserve the TOP ~22% of the page as quiet, low-detail negative space — for example: open sky with NO clouds or birds, a soft atmospheric haze, blurred distant treetops, or a calm watercolor wash that blends with the scene below. Keep the focal character and any busy detail OUT of this band. DO NOT paint a literal white box, banner, panel, color-block, or rectangular card in this area. The reservation is a *compositional choice* (open sky, calm haze) — NOT a *graphic element*.',
   'bottom':
-    'Reserve the BOTTOM ~22% of the page as low-detail negative space (foreground grass, sand, water, or a soft warm wash) so a typography overlay can sit there cleanly. Do NOT place the focal character or busy detail in that band.',
+    'Reserve the BOTTOM ~22% of the page as quiet, low-detail negative space — for example: foreground grass that fades to a single tone, calm water with no ripples, smooth sand, or a soft warm wash that blends with the scene above. Keep the focal character and any busy detail OUT of this band. DO NOT paint a literal white box, banner, panel, color-block, or rectangular card in this area. The reservation is a *compositional choice* (calm ground or water) — NOT a *graphic element*.',
   'left':
-    'Reserve the LEFT ~30% of the page as low-detail negative space (open sky, distant softly washed background, foliage simplified to mood) so a typography overlay can sit there cleanly. Compose the focal character on the right two-thirds of the page.',
+    'Reserve the LEFT ~30% of the page as quiet, low-detail negative space — for example: open sky, a distant softly washed mountain or forest, foliage simplified to a single mood color, calm sea, or a misty atmospheric blur. Compose the focal character and busy detail on the RIGHT two-thirds of the page. DO NOT paint a literal white box, banner, panel, color-block, or rectangular card on the left. The reservation is a *compositional choice* (an organic part of the scene) — NOT a *graphic element*.',
   'right':
-    'Reserve the RIGHT ~30% of the page as low-detail negative space (open sky, distant softly washed background, foliage simplified to mood) so a typography overlay can sit there cleanly. Compose the focal character on the left two-thirds of the page.',
+    'Reserve the RIGHT ~30% of the page as quiet, low-detail negative space — for example: open sky, a distant softly washed mountain or forest, foliage simplified to a single mood color, calm sea, or a misty atmospheric blur. Compose the focal character and busy detail on the LEFT two-thirds of the page. DO NOT paint a literal white box, banner, panel, color-block, or rectangular card on the right. The reservation is a *compositional choice* (an organic part of the scene) — NOT a *graphic element*.',
   'center-overlay':
-    'Compose the scene normally, but ensure the CENTER of the page (roughly the middle third, both horizontally and vertically) is calm enough that a translucent typography card can sit on top of it without obscuring the focal character. Keep the focal character\'s face out of the dead center.',
+    'Compose the scene normally, but ensure the CENTER of the page (roughly the middle third, both horizontally and vertically) is calm enough that a typography halo can sit on top of it without obscuring the focal character. Keep the focal character\'s face OUT of the dead center. DO NOT paint a literal white box, banner, panel, color-block, or rectangular card in the center — the overlay is a soft, transparent halo, not a card. The center should look like a normal part of the scene that simply has fewer competing visual elements.',
 };
 
 /**

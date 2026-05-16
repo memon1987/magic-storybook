@@ -9,6 +9,12 @@ export interface PaletteColors {
   cardBg: string;
   textDark: string;
   textMuted: string;
+  // FC-018: warm halo color used as the radial-gradient and text-shadow tint
+  // behind narration text in the story reader. Must NOT be pure white — pure
+  // white halos look like "label residue" against warm storybook illustrations.
+  // Derived from each palette's `background` family, slightly more saturated
+  // so the halo reads as an atmospheric tint, not a solid card.
+  haloColor: string;
 }
 
 export interface ColorPalette {
@@ -36,6 +42,7 @@ export const colorPalettes: ColorPalette[] = [
       cardBg: '#FFFFFF',
       textDark: '#2D2D2D',
       textMuted: '#4A4A4A',
+      haloColor: '#FFF4D6',
     },
   },
   {
@@ -54,6 +61,7 @@ export const colorPalettes: ColorPalette[] = [
       cardBg: '#FFFFFF',
       textDark: '#2D3142',
       textMuted: '#5E6472',
+      haloColor: '#FFE9EE',
     },
   },
   {
@@ -72,6 +80,7 @@ export const colorPalettes: ColorPalette[] = [
       cardBg: '#FFFFFF',
       textDark: '#2D5016',
       textMuted: '#5A6C52',
+      haloColor: '#F2F8E5',
     },
   },
   {
@@ -90,6 +99,7 @@ export const colorPalettes: ColorPalette[] = [
       cardBg: '#FFFFFF',
       textDark: '#0A3D5C',
       textMuted: '#4A7C9C',
+      haloColor: '#FFF3E0',
     },
   },
   {
@@ -108,6 +118,7 @@ export const colorPalettes: ColorPalette[] = [
       cardBg: '#FFFFFF',
       textDark: '#4A3F35',
       textMuted: '#8B7E74',
+      haloColor: '#FFF0E0',
     },
   },
   {
@@ -126,6 +137,7 @@ export const colorPalettes: ColorPalette[] = [
       cardBg: '#FFFFFF',
       textDark: '#3D2E2E',
       textMuted: '#6B5656',
+      haloColor: '#FFE6D6',
     },
   },
 ];

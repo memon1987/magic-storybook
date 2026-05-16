@@ -1,8 +1,10 @@
 import React, { useMemo } from 'react';
 import {
   Group,
+  Paint,
   Paragraph,
-  RoundedRect,
+  RadialGradient,
+  Rect,
   Skia,
   TextAlign,
   type SkTypefaceFontProvider,
@@ -34,27 +36,45 @@ interface PageTextLayerProps {
   height: number;
   /** Accent color for emphasized words. */
   accentColor: string;
-  /** Translucent backing-rect color for legibility over the illustration. */
-  backingColor: string;
+  /**
+   * Warm halo color (FC-018) used as:
+   *   - The tint of the load-bearing text shadow (the "halo" shadow that
+   *     replaced the FC-015 RoundedRect backing).
+   *   - The fill of the soft radial halo behind text on `center-overlay`
+   *     pages (the only position that sits over the focal subject by
+   *     design and needs a legibility safety net).
+   *
+   * MUST be a `#RRGGBB` string (no alpha). Alpha is added internally via
+   * 8-digit hex suffixes for shadow + gradient stops.
+   */
+  haloColor: string;
   /** Body text color. */
   textColor: string;
 }
 
 /**
- * FC-015: Skia node fragment that renders narration text inside the page-curl
- * Group. Because it lives inside the same `<Group layer={Paint with RuntimeShader}>`
- * that the curl shader operates on, the text is composited into the offscreen
- * layer FIRST and then deformed by the shader — meaning the text curls with
- * the page rather than sliding around as an independent overlay.
+ * FC-015 / FC-018: Skia node fragment that renders narration text inside the
+ * page-curl Group. Lives in the same `<Group layer={Paint with RuntimeShader}>`
+ * the curl shader operates on, so the curl shader composites image + text into
+ * the offscreen layer FIRST and then deforms that composite — text curls with
+ * the page rather than floating as an independent overlay.
+ *
+ * FC-018 (2026-05-16) replaced the opaque rounded-rect backing with:
+ *   - A multi-shadow text stack (warm halo + soft drop + tight shadow) for
+ *     legibility on most backgrounds without a hard rectangle blocking the art.
+ *   - An optional soft radial halo behind text — ONLY for `center-overlay`
+ *     pages, where the text sits directly over the focal subject and needs a
+ *     graceful-degradation safety net. Other positions trust the illustrator's
+ *     reserved negative space + the shadow stack.
  *
  * Rendering contract:
- *   - `page === null` OR `page.textPosition` undefined / null → render nothing.
+ *   - `page === null` OR `page.textPosition` undefined/null → render nothing.
  *     This is how legacy stories (text already baked into the image) opt out.
  *   - `fontMgr === null` (Skia font registration still loading or failed)
- *     → render nothing. Reader logs the failure on first miss.
- *   - Otherwise: build a Paragraph with the writing-style font + emphasized
- *     words highlighted, lay it out at the chosen position with a translucent
- *     backing rounded-rect for contrast.
+ *     → render nothing.
+ *   - Otherwise: build a Paragraph with the writing-style font + shadow stack
+ *     + emphasized words highlighted, lay it out at the chosen position. If
+ *     position is `center-overlay`, also render the radial halo behind it.
  */
 export function PageTextLayer({
   page,
@@ -63,18 +83,16 @@ export function PageTextLayer({
   width,
   height,
   accentColor,
-  backingColor,
+  haloColor,
   textColor,
 }: PageTextLayerProps) {
   const layout = useMemo(() => {
     if (!page || !page.textPosition || !fontMgr) return null;
 
-    // Review fix HIGH-2: a single bad page (malformed color, builder API
-    // contract violation across Skia versions, fontMgr in a bad state, etc.)
-    // would otherwise throw during render and crash the whole reader screen
-    // (no ErrorBoundary in the tree). Catch + return null → reader shows the
-    // illustration with no overlay, matches the plan's graceful-degradation
-    // contract for the font-load-failed case.
+    // Review fix HIGH-2 (FC-015): any throw inside paragraph build would crash
+    // the reader (no ErrorBoundary in tree). Catch + return null → reader
+    // shows the illustration with no overlay (matches font-load-failed
+    // graceful-degradation contract).
     try {
       const fontFamily = writingStyle
         ? WRITING_STYLE_FONT_MAP[writingStyle] ?? DEFAULT_OVERLAY_FONT
@@ -82,17 +100,11 @@ export function PageTextLayer({
 
       const zone = computeZone(page.textPosition, width, height);
 
-      // Review fix MEDIUM-3: phones (typical landscape height ≈ 375-430 dp)
-      // would all hit the previous floor of 22 dp — too small for early
-      // readers at arm's length. Raised floor to 26; new formula puts iPhone
-      // 14 landscape at ~26-29 dp and tablets near the 48 cap.
+      // Font size scales with canvas height. Phones (landscape height
+      // ~375-430 dp) land at ~26-29 dp; tablets near the 48 cap.
       const baseFontSize = Math.min(48, Math.max(26, height / 18));
       const emphFontSize = baseFontSize * 1.22;
 
-      // Review fix MEDIUM-5: removed maxLines cap — silent truncation on a
-      // children's book is the worst failure mode. If a long narration
-      // overflows the zone, that's a visible bug we can iterate on (story
-      // prompt nudge or position re-pick), not data the user is missing.
       const paragraphStyle = {
         textAlign:
           page.textPosition === 'left'
@@ -102,17 +114,44 @@ export function PageTextLayer({
               : TextAlign.Center,
       };
 
+      // FC-018: multi-shadow text stack replaces the rounded-rect backing.
+      // Array order matters — Skia paints shadows in order, all behind the
+      // glyph, so widest goes FIRST. Cap at 3 (4+ has measurable jank on the
+      // curl shader's offscreen layer on older Android).
+      const baseShadows = [
+        // (1) Warm halo — the load-bearing legibility helper. Uses palette
+        //     haloColor at ~70% alpha (B3 hex). Replaces the FC-015 rect.
+        { color: Skia.Color(haloColor + 'B3'), offset: { x: 0, y: 0 }, blurRadius: 16 },
+        // (2) Soft drop shadow — gives the text "lift" off the page.
+        { color: Skia.Color('#00000088'),       offset: { x: 0, y: 2 }, blurRadius: 5 },
+        // (3) Tight near-glyph shadow — adds visual weight, fakes a subtle
+        //     outline. Skia text shadow is Gaussian (no real stroke), so this
+        //     reads as a soft edge-darken, not a hard outline.
+        { color: Skia.Color('#00000066'),       offset: { x: 0, y: 1 }, blurRadius: 2 },
+      ];
+      // Emphasized words get a slightly heavier drop shadow to match their
+      // larger font size — same recipe, scaled up.
+      const emphShadows = [
+        { color: Skia.Color(haloColor + 'B3'), offset: { x: 0, y: 0 }, blurRadius: 20 },
+        { color: Skia.Color('#00000099'),       offset: { x: 0, y: 3 }, blurRadius: 7 },
+        { color: Skia.Color('#00000066'),       offset: { x: 0, y: 1 }, blurRadius: 2 },
+      ];
+
       const baseTextStyle = {
         color: Skia.Color(textColor),
         fontFamilies: [fontFamily],
         fontSize: baseFontSize,
         heightMultiplier: 1.25,
+        // FC-018: heavy baseline weight for picture-book typography feel.
+        fontStyle: { weight: 700 } as const,
+        shadows: baseShadows,
       };
       const emphTextStyle = {
         ...baseTextStyle,
         color: Skia.Color(accentColor),
         fontSize: emphFontSize,
-        fontStyle: { weight: 700 } as const,
+        fontStyle: { weight: 800 } as const,
+        shadows: emphShadows,
       };
 
       const builder = Skia.ParagraphBuilder.Make(paragraphStyle, fontMgr);
@@ -127,11 +166,9 @@ export function PageTextLayer({
       if (emph.length === 0) {
         builder.addText(page.text);
       } else {
-        // Build an alternation regex like \b(word1|word2)\b that captures the
-        // matched word so we can split-and-walk the text in original order.
         const escaped = emph.map(escapeRegExp);
         const pattern = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi');
-        const tokens = page.text.split(pattern); // [plain, match, plain, match, ...]
+        const tokens = page.text.split(pattern);
         tokens.forEach((tok, i) => {
           if (tok.length === 0) return;
           const isMatch = i % 2 === 1;
@@ -149,9 +186,8 @@ export function PageTextLayer({
       paragraph.layout(zone.width);
       const measuredHeight = paragraph.getHeight();
 
-      // Review fix MEDIUM-1: re-anchor vertically per position. Previously
-      // `left`/`right` used `zone.y = height/2` as the TOP of the text and
-      // grew downward, ending up bottom-heavy. Now centered around midpoint.
+      // Re-anchor vertically per position (centered for left/right, edge-
+      // hugging for top/bottom, biased-upper for center-overlay).
       let finalY: number;
       switch (page.textPosition) {
         case 'top':
@@ -165,49 +201,58 @@ export function PageTextLayer({
           finalY = (height - measuredHeight) / 2;
           break;
         case 'center-overlay':
-          // Slight upward bias so a tall block doesn't sit dead-center over
-          // the focal subject's face.
           finalY = Math.max(zone.padding, height * 0.32 - measuredHeight * 0.2);
           break;
       }
 
-      // Backing rect dimensions: slight horizontal padding around the text block.
-      const padX = baseFontSize * 0.6;
-      const padY = baseFontSize * 0.45;
-      const backingX = zone.x - padX;
-      const backingY = finalY - padY;
-      const backingW = zone.width + padX * 2;
-      const backingH = measuredHeight + padY * 2;
+      // FC-018: halo dimensions for center-overlay's radial gradient. The halo
+      // extends ~1.4× the text block in each direction so the soft fade reaches
+      // organically past the glyphs (rather than cutting off at a hard edge).
+      const haloPadX = baseFontSize * 1.6;
+      const haloPadY = baseFontSize * 1.2;
+      const haloX = zone.x - haloPadX;
+      const haloY = finalY - haloPadY;
+      const haloW = zone.width + haloPadX * 2;
+      const haloH = measuredHeight + haloPadY * 2;
 
       return {
         paragraph,
         x: zone.x,
         y: finalY,
         width: zone.width,
-        backingX,
-        backingY,
-        backingW,
-        backingH,
-        cornerRadius: baseFontSize * 0.5,
+        haloX,
+        haloY,
+        haloW,
+        haloH,
+        position: page.textPosition,
       };
     } catch (e) {
       console.warn('PageTextLayer: paragraph build failed, rendering image without overlay', e);
       return null;
     }
-  }, [page, writingStyle, fontMgr, width, height, accentColor, textColor]);
+  }, [page, writingStyle, fontMgr, width, height, accentColor, haloColor, textColor]);
 
   if (!layout) return null;
 
   return (
     <Group>
-      <RoundedRect
-        x={layout.backingX}
-        y={layout.backingY}
-        width={layout.backingW}
-        height={layout.backingH}
-        r={layout.cornerRadius}
-        color={backingColor}
-      />
+      {layout.position === 'center-overlay' && (
+        // FC-018: soft radial halo only for center-overlay (the position that
+        // sits over the focal subject by design). Other positions trust the
+        // illustrator's reserved negative space + the shadow stack alone.
+        // Alpha 8C (~55%) at center, 00 at edge, fading organically — replaces
+        // the hard-edged FC-015 rect with a "page got misty here" feel.
+        <Rect x={layout.haloX} y={layout.haloY} width={layout.haloW} height={layout.haloH}>
+          <Paint>
+            <RadialGradient
+              c={{ x: layout.haloX + layout.haloW / 2, y: layout.haloY + layout.haloH / 2 }}
+              r={Math.max(layout.haloW, layout.haloH) / 2}
+              colors={[Skia.Color(haloColor + '8C'), Skia.Color(haloColor + '00')]}
+              positions={[0, 1]}
+            />
+          </Paint>
+        </Rect>
+      )}
       <Paragraph
         paragraph={layout.paragraph}
         x={layout.x}
@@ -228,12 +273,9 @@ interface Zone {
 /**
  * Compute the X and width of the text block for a given position. The Y
  * returned here is a placeholder — the caller always recomputes `finalY`
- * after measuring the paragraph height (review fix MEDIUM-1). We only return
- * `y` so the Zone shape stays simple; the value is not load-bearing.
+ * after measuring the paragraph height.
  */
 function computeZone(position: TextPosition, width: number, height: number): Zone {
-  // Padding scales with canvas size so the layout looks consistent at any
-  // resolution. Roughly 4% of the smaller dimension.
   const padding = Math.max(16, Math.min(width, height) * 0.04);
 
   switch (position) {

@@ -197,7 +197,7 @@ export default function ReadScreen() {
         fontMgr={fontMgr}
         textColor={palette.colors.textDark}
         accentColor={palette.colors.accent}
-        backingColor={`${palette.colors.cardBg}D9` /* ~85% alpha for legibility */}
+        haloColor={palette.colors.haloColor /* FC-018: warm tint, NOT pure white; alpha applied internally */}
       />
 
       {controlsVisible && (

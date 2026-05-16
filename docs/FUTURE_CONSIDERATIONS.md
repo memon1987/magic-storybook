@@ -152,6 +152,21 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
+### FC-018: Playful, integrated narration text (FC-015 refinement)
+
+**Status:** Plan published
+**Size estimate:** M
+**Owner:** Zeshan / Claude
+**Plan file:** `docs/plans/fc-018.md`
+
+**Problem / opportunity:** FC-015's translucent white backing rect behind narration text reads as a UI panel slapped on top of the illustration, not typography integrated into the page. User wants a Dr. Seuss / Pout-Pout Fish feel. Plan: drop the rect entirely; replace legibility with a multi-shadow text stack (warm halo + drop + tight) and a soft radial halo only for `center-overlay` (the worst-case position). Also tighten the illustration prompt's negative-space contract so Gemini stops painting literal white rectangles.
+
+**Open questions:**
+- Should the radial halo extend beyond `center-overlay` to all positions if legibility issues emerge?
+- Font weight uniform across writing styles or per-voice?
+
+---
+
 ### FC-017: Story generation reliability — request resumes / async job model
 
 **Status:** Consideration
