@@ -148,6 +148,19 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       status: 'complete',
       pageCount: story.pages.length,
       characterReferenceUrls, // FC-013: persist character ref URLs (empty object when not used)
+      // FC-013/FC-019: persist the textual character sheets + setting identity
+      // (not just the rendered ref URLs). These were previously discarded
+      // after generation, which left the spike route (FC-019) blind on
+      // character anchoring inputs when it re-rendered Variant B against
+      // an existing story. Persisting them costs ~1-2 KB / story; their
+      // absence on pre-FC-019 stories degrades to no-prompt-anchor for
+      // those (FC-019 spike then needs to use only post-FC-019 stories).
+      ...(story.characterSheets && story.characterSheets.length > 0
+        ? { characterSheets: story.characterSheets }
+        : {}),
+      ...(story.settingIdentity && story.settingIdentity.name
+        ? { settingIdentity: story.settingIdentity }
+        : {}),
       ...(story.titlePage ? { titlePage: story.titlePage } : {}),                      // FC-012
       ...(titlePageImageUrl ? { titlePageImageUrl } : {}),                              // FC-012
     });

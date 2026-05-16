@@ -25,7 +25,23 @@ import { ArtStyle } from '../types';
  */
 
 const RECRAFT_BASE_URL = 'https://external.api.recraft.ai/v1';
-const RECRAFT_MODEL = 'recraftv4'; // quality tier; recraftv4_1 is cost-optimized
+
+/**
+ * Review fix HIGH-3: the exact model string Recraft's API accepts isn't
+ * 100% verifiable from docs alone. Vercel AI Gateway uses `recraft-v4`
+ * (dashed); Recraft's own JSON example uses `recraftv4_1` (underscored,
+ * with a `_1` suffix denoting V4.1). Most likely V4 quality tier is
+ * `recraftv4` (no suffix), but if the API returns HTTP 400 with an
+ * "invalid model" error during the spike, override via env without a
+ * redeploy: `gcloud run services update --set-env-vars=RECRAFT_MODEL=...`.
+ *
+ * Known candidates worth trying in order if the default 400s:
+ *   recraftv4          (default)
+ *   recraftv4_0
+ *   recraft-v4
+ *   recraftv3          (fallback to V3 if V4 naming is wrong)
+ */
+const RECRAFT_MODEL = process.env.RECRAFT_MODEL || 'recraftv4';
 const DEFAULT_SIZE = '1024x1024';
 
 // Map our ArtStyle to Recraft's style/substyle. Recraft's style library is

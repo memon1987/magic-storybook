@@ -30,7 +30,29 @@ import { generateRecraftIllustration } from '../services/recraft';
 const router = Router();
 const db = new Firestore();
 
+/**
+ * Review fix HIGH-1: route-level kill switch independent of per-variant
+ * flags. With SPIKE_ROUTE_ENABLED unset (default in production), the route
+ * returns 404 BEFORE auth + Firestore reads, so a leaked Firebase token
+ * can't enumerate Firestore via this surface even when the route exists
+ * in the deployed binary.
+ */
+router.use((req, res, next) => {
+  if (process.env.SPIKE_ROUTE_ENABLED !== 'true') {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  next();
+});
+
 router.use(authMiddleware);
+
+/**
+ * Review fix HIGH-1: hard cap on pages-per-spike-run so a single
+ * invocation can't burn unbounded cost (12-page story × 2 variants
+ * × $0.20 avg = ~$4.80/run; with this cap, worst case ~$2.40/run).
+ */
+const MAX_SPIKE_PAGES = 6;
 
 // Rough cost estimates per image, May 2026 prices. Used only for the spike
 // report so we can compare "$ per story" across variants. NOT authoritative
@@ -61,6 +83,11 @@ interface SpikeCompareResponse {
   storyId: string;
   storyTitle: string;
   pageCount: number;
+  /** Set to true if story had more pages than MAX_SPIKE_PAGES and we ran on a prefix. */
+  truncated: boolean;
+  totalStoryPages: number;
+  /** Per-story warnings (e.g. missing char sheets, char ref fetch failures). */
+  warnings: string[];
   /** Variant A is the existing story's pages.imageUrl (control). */
   control: {
     variant: 'A-flash-skia-overlay';
@@ -93,12 +120,17 @@ router.post('/compare-story/:storyId', async (req: AuthRequest, res: Response) =
       res.status(400).json({ error: 'Story has no pages to compare' });
       return;
     }
-    const pages = pagesSnap.docs.map((d) => d.data() as {
+    const allPages = pagesSnap.docs.map((d) => d.data() as {
       pageNumber: number;
       text: string;
       sceneDescription: string;
       imageUrl: string;
     });
+
+    // Review fix HIGH-1: cap pages per run. If story has more, we spike a
+    // subset (first MAX_SPIKE_PAGES) and flag the truncation in response.
+    const truncated = allPages.length > MAX_SPIKE_PAGES;
+    const pages = truncated ? allPages.slice(0, MAX_SPIKE_PAGES) : allPages;
 
     const artStyle = (storyData?.artStyle ?? 'watercolor') as ArtStyle;
     const characterSheets = (storyData?.characterSheets ?? []) as Array<{ name: string; description: string }>;
@@ -115,9 +147,19 @@ router.post('/compare-story/:storyId', async (req: AuthRequest, res: Response) =
     for (const [name, url] of Object.entries(refsMap)) {
       try {
         const r = await fetch(url);
-        if (!r.ok) continue;
+        if (!r.ok) {
+          // Review fix MEDIUM-2: log non-OK responses so we don't silently
+          // run Variant B with missing char refs and wrongly conclude
+          // "Pro Image has bad character consistency."
+          console.warn(`[SPIKE] Char ref for "${name}" returned HTTP ${r.status} from ${url} — skipping`);
+          continue;
+        }
         const buf = Buffer.from(await r.arrayBuffer());
-        const mime = r.headers.get('content-type') ?? 'image/png';
+        // Defensive: Cloud Storage usually preserves content-type, but coerce
+        // anything outside image/* to PNG so Gemini's multimodal call doesn't
+        // reject the inline data.
+        let mime = r.headers.get('content-type') ?? 'image/png';
+        if (!mime.startsWith('image/')) mime = 'image/png';
         charRefImages.push({ type: 'character', name, data: buf.toString('base64'), mimeType: mime });
       } catch (e) {
         console.warn(`[SPIKE] Failed to fetch char ref for "${name}":`, e);
@@ -125,10 +167,29 @@ router.post('/compare-story/:storyId', async (req: AuthRequest, res: Response) =
     }
     console.log(`[SPIKE] Loaded story ${storyId} (${pages.length} pages, ${charRefImages.length} char refs, style=${artStyle})`);
 
+    // Collect warnings before kicking off the variant runs.
+    const warnings: string[] = [];
+    if (truncated) {
+      warnings.push(
+        `Story has ${allPages.length} pages but spike capped at ${MAX_SPIKE_PAGES} (HIGH-1 fix). Running on pages 1..${MAX_SPIKE_PAGES} only.`,
+      );
+    }
+    if (!characterSheets || characterSheets.length === 0) {
+      warnings.push(
+        'Story has no characterSheets persisted (likely generated before FC-019 fix landed). Variant B will run WITHOUT character-name anchoring in the prompt — its character-consistency results are NOT representative of what Pro Image can do with full FC-013 inputs. Recommend re-running spike against a story generated after FC-019 is deployed.',
+      );
+    }
+    if (charRefImages.length === 0 && Object.keys(refsMap).length > 0) {
+      warnings.push(
+        `Story has ${Object.keys(refsMap).length} characterReferenceUrls but ALL fetches failed — Variant B will run with zero char ref images.`,
+      );
+    }
+
     const control = {
       variant: 'A-flash-skia-overlay' as const,
       pages: pages.map((p) => ({ pageNumber: p.pageNumber, imageUrl: p.imageUrl })),
-      notes: 'Existing story pages (Gemini Flash + Skia overlay rendered on mobile). For visual compare, open these in the mobile app since the Skia overlay only renders in the reader.',
+      notes:
+        'IMPORTANT: Variant A is the existing story\'s naked Gemini Flash output (no text — Skia overlay renders only in the mobile reader). For a true side-by-side, open the story in the iOS sim alongside the browser tabs for Variant B + C, OR mentally apply the FC-018 overlay style when comparing. The browser-only comparison is biased toward B/C because they show finished text-in-image pages and A shows naked illustrations.',
     };
 
     // 3) Variant B: Gemini 3 Pro Image, text baked in
@@ -149,6 +210,9 @@ router.post('/compare-story/:storyId', async (req: AuthRequest, res: Response) =
       storyId,
       storyTitle: storyData?.title ?? '(untitled)',
       pageCount: pages.length,
+      truncated,
+      totalStoryPages: allPages.length,
+      warnings,
       control,
       variantB,
       variantC,
