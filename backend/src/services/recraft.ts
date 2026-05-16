@@ -27,21 +27,24 @@ import { ArtStyle } from '../types';
 const RECRAFT_BASE_URL = 'https://external.api.recraft.ai/v1';
 
 /**
- * Review fix HIGH-3: the exact model string Recraft's API accepts isn't
- * 100% verifiable from docs alone. Vercel AI Gateway uses `recraft-v4`
- * (dashed); Recraft's own JSON example uses `recraftv4_1` (underscored,
- * with a `_1` suffix denoting V4.1). Most likely V4 quality tier is
- * `recraftv4` (no suffix), but if the API returns HTTP 400 with an
- * "invalid model" error during the spike, override via env without a
- * redeploy: `gcloud run services update --set-env-vars=RECRAFT_MODEL=...`.
+ * FC-019 spike refinement (post-run-2): switched the default model to
+ * `recraftv3`.
  *
- * Known candidates worth trying in order if the default 400s:
- *   recraftv4          (default)
- *   recraftv4_0
- *   recraft-v4
- *   recraftv3          (fallback to V3 if V4 naming is wrong)
+ * Why V3, not V4: the custom-style API (POST /v1/styles → style_id created
+ * from up to 5 reference images) is **V3-only** — V4/V4.1 support neither
+ * the `style` enum nor custom `style_id`. The spike's two open problems
+ * (Recraft art not playful enough; characters totally inconsistent across
+ * pages) are BOTH solved by deriving a custom style from the story's
+ * FC-013 character reference model-sheets and passing that style_id to
+ * every page. That path requires V3. V3 is also still the long-form
+ * text-rendering leader (was #1 on Artificial Analysis for 5 months),
+ * so text quality is not sacrificed.
+ *
+ * Override via env without a redeploy if needed:
+ *   gcloud run services update --set-env-vars=RECRAFT_MODEL=...
  */
-const RECRAFT_MODEL = process.env.RECRAFT_MODEL || 'recraftv4';
+const RECRAFT_MODEL = process.env.RECRAFT_MODEL || 'recraftv3';
+const STYLE_BASE = 'digital_illustration'; // base category for custom style creation
 const DEFAULT_SIZE = '1024x1024';
 
 // FC-019 spike fix (post-run-1): Recraft V4 does NOT support the `style` /
@@ -76,6 +79,71 @@ export interface RecraftIllustrationResult {
   recraftLatencyMs: number;
 }
 
+interface RefImage {
+  data: string; // base64
+  mimeType: string;
+}
+
+/**
+ * FC-019 spike refinement: create a Recraft custom style from the story's
+ * FC-013 character reference model-sheets. The returned style_id is then
+ * passed to every page generation so all pages share ONE locked visual
+ * identity — which simultaneously fixes:
+ *   (1) "art not playful / not children's-book enough" — the style is now
+ *       derived from OUR watercolor char refs, not Recraft's design-forward
+ *       V4 defaults; and
+ *   (2) "characters totally different each page" — the same images that
+ *       anchor Gemini's FC-013 consistency now anchor Recraft's style.
+ *
+ * POST /v1/styles is multipart/form-data, V3-only, max 5 images, total
+ * <= 5 MB. Returns { id: <uuid> }.
+ */
+export async function createRecraftStyle(
+  refImages: RefImage[],
+): Promise<string> {
+  const apiKey = process.env.RECRAFT_API_KEY;
+  if (!apiKey) {
+    throw new Error('RECRAFT_API_KEY is not set — cannot create Recraft style');
+  }
+  if (refImages.length === 0) {
+    throw new Error('createRecraftStyle called with zero reference images');
+  }
+
+  // Recraft caps at 5 images / 5 MB total. Take up to 5; if total exceeds
+  // ~4.5 MB (headroom under the 5 MB hard cap) drop the largest extras.
+  const capped = refImages.slice(0, 5);
+  const form = new FormData();
+  form.append('style', STYLE_BASE);
+  let totalBytes = 0;
+  for (let i = 0; i < capped.length; i++) {
+    const buf = Buffer.from(capped[i].data, 'base64');
+    totalBytes += buf.length;
+    if (totalBytes > 4_500_000) {
+      console.warn(`[SPIKE-RECRAFT] style refs exceeded ~4.5MB at image ${i}; using first ${i} only`);
+      break;
+    }
+    const ext = capped[i].mimeType.includes('jpeg') || capped[i].mimeType.includes('jpg') ? 'jpg' : 'png';
+    form.append('files', new Blob([buf], { type: capped[i].mimeType }), `ref-${i}.${ext}`);
+  }
+
+  console.log(`[SPIKE-RECRAFT] Creating custom style from ${capped.length} ref image(s) (~${Math.round(totalBytes / 1024)}KB total, base=${STYLE_BASE})...`);
+  const resp = await fetch(`${RECRAFT_BASE_URL}/styles`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}` }, // do NOT set Content-Type; fetch sets the multipart boundary
+    body: form,
+  });
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '<no body>');
+    throw new Error(`Recraft create-style returned ${resp.status}: ${errText.slice(0, 250)}`);
+  }
+  const json = (await resp.json()) as { id?: string };
+  if (!json.id) {
+    throw new Error(`Recraft create-style response missing id: ${JSON.stringify(json).slice(0, 200)}`);
+  }
+  console.log(`[SPIKE-RECRAFT] Custom style created: ${json.id}`);
+  return json.id;
+}
+
 /**
  * Generate a single illustration via Recraft V4.
  *
@@ -92,14 +160,18 @@ export async function generateRecraftIllustration(
   storyId: string,
   pageNumber: number,
   style: ArtStyle = 'watercolor',
+  styleId?: string,
 ): Promise<RecraftIllustrationResult> {
   const apiKey = process.env.RECRAFT_API_KEY;
   if (!apiKey) {
     throw new Error('RECRAFT_API_KEY is not set — cannot run Recraft spike variant');
   }
 
-  // V4 has no style param — append the art-direction phrase to the prompt.
   const stylePhrase = STYLE_PHRASE[style];
+  // Even with a custom style_id locking the visual identity, keep a short
+  // art-direction phrase in the prompt as reinforcement (Recraft blends
+  // prompt + style). When NO style_id (fallback), the phrase carries all
+  // the art direction.
   const finalPrompt = `${prompt}\n\nArt style: ${stylePhrase}.`;
   const body: Record<string, unknown> = {
     prompt: finalPrompt,
@@ -108,10 +180,15 @@ export async function generateRecraftIllustration(
     size: DEFAULT_SIZE,
     response_format: 'url',
   };
+  if (styleId) {
+    // style_id (V3-only) locks the visual identity derived from the
+    // story's character refs — solves both playfulness + char consistency.
+    body.style_id = styleId;
+  }
 
   const payloadBytes = JSON.stringify(body).length;
   console.log(
-    `[SPIKE-RECRAFT] Generating page ${pageNumber} with ${RECRAFT_MODEL} (style via prompt: "${style}") [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
+    `[SPIKE-RECRAFT] Generating page ${pageNumber} with ${RECRAFT_MODEL} (${styleId ? 'style_id=' + styleId.slice(0, 8) : 'prompt-only style: ' + style}) [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
   );
   const startTime = Date.now();
 
