@@ -81,7 +81,32 @@ URLs: `stories/79555bf6-…/spike-recraft/page-{1..4}-*.png` (run 2026-05-16, th
 | Cost (4pg) | $0.27 full pipeline | **$0.536** | **$0.16** |
 | Vendor | Google | Google | Recraft (new dep) |
 
-**C is 4× faster and 3× cheaper than B.** Visual quality (playfulness, char consistency, "author-made" feel) is the user's call — pending review of the fair V3 URLs vs the Pro URLs vs the sim's Skia-overlay reader.
+**C is 4× faster and 3× cheaper than B.**
+
+### Run 3 — exhausting Recraft V3 quality + consistency levers (2026-05-16)
+
+User feedback on the run-2 V3 output: notably less playful / more rudimentary than Gemini. Root cause identified: the run-2 custom style was built from FC-013 character **model-sheets** (flat poses on white bg) — Recraft's custom style learns the aesthetic of its training images, so it learned "flat + simple." Not Recraft's ceiling; our input. Run 3 tested all remaining levers (all configs add `controls.artistic_level=5`, landscape `1707x1024`, and a negative_prompt steering off "flat/simple/rudimentary/clip-art"):
+
+| Config | Style source | Latency (4pg) | Cost | URLs |
+|---|---|---|---|---|
+| **C-refs** (run-2 baseline) | custom style ← FC-013 white-bg model-sheets | 47 s | $0.16 | `spike-recraft/…f1de4f36 / 07a14d9b / 2990895b / 760b7aa9` |
+| **C-pages** (run-3) | custom style ← this story's rich Gemini page images | 72 s | $0.16 | `spike-recraft/…b33d0e11 / 26b9cc0a / 1ca9ae89 / faaecde5` |
+| **C-curated** (run-3) | Recraft V3 curated `style:"Child book"` (chars via prompt only) | 58 s | $0.16 | `spike-recraft/…d286d05d / e139bfa7 / a0138266 / e5bcb1fe` |
+
+All Recraft V3 configs: ~$0.16/4pg ($0.04/img — cheaper than Flash $0.067), ~50-75 s/4pg sequential (vs Pro's 190 s, no tail spikes).
+
+**Levers now exhausted on Recraft:** model (V3 vs V4 — V4 structurally can't anchor style/chars), style source (model-sheets vs rich pages vs curated), artistic_level (maxed), size (landscape), negative_prompt. Nothing material left untried on Recraft's side. Remaining question is purely visual-quality judgment.
+
+### Final decision matrix — needs user's eyes
+
+Open per-page side by side. Decision criteria below were committed pre-spike.
+
+- **B — Gemini 3 Pro:** `spike-pro/…ecd138f3 / ee7dff6c / 79cddccf / 16035392`
+- **C-pages — Recraft V3, style from Gemini pages (lead hypothesis):** see table
+- **C-curated — Recraft V3 "Child book":** see table
+- **A — current Flash+Skia:** open story `79555bf6` in the iOS sim reader
+
+The decision hinges on: does ANY Recraft config reach Gemini's playfulness/character-quality bar? If yes → Recraft V3 wins on 4× speed + 3× cost. If no → Recraft's aesthetic ceiling is genuinely below Gemini for this product, and the decision narrows to B (Pro, text-in-image) vs A (stay Skia, iterate).
 
 ## Decision criteria (committed pre-spike, unchanged)
 
