@@ -3,14 +3,15 @@ import { Firestore } from '@google-cloud/firestore';
 import { authMiddleware } from '../middleware/auth';
 import { AuthRequest, ArtStyle } from '../types';
 import { generateIllustrationPro, ReferenceImage } from '../services/gemini';
-import { generateRecraftIllustration } from '../services/recraft';
+import { generateRecraftIllustration, createRecraftStyle } from '../services/recraft';
 
 /**
  * FC-019 spike route — dev/owner-only comparison tool. NOT for production use.
  *
  * Takes an existing story ID, re-generates ALL pages via two alternate
- * pipelines (Gemini 3 Pro Image with text baked in; Recraft V4 with text
- * baked in), and returns side-by-side URLs + latency + estimated cost.
+ * pipelines (Gemini 3 Pro Image with text baked in; Recraft V3 with text
+ * baked in + a custom style_id derived from the story's FC-013 character
+ * refs), and returns side-by-side URLs + latency + estimated cost.
  *
  * Variant A (control) is the existing story's pages.imageUrl — those are
  * already-generated Flash + Skia overlay outputs.
@@ -18,7 +19,7 @@ import { generateRecraftIllustration } from '../services/recraft';
  * Each variant gated by an env var so production behavior is unchanged
  * when this branch is deployed (env vars OFF by default):
  *   - SPIKE_USE_PRO_IMAGE=true   → enables Variant B (Pro Image)
- *   - SPIKE_USE_RECRAFT=true     → enables Variant C (Recraft V4)
+ *   - SPIKE_USE_RECRAFT=true     → enables Variant C (Recraft V3 + style_id)
  *   - RECRAFT_API_KEY=...        → required for Variant C
  *
  * Auth: same authMiddleware as /api/stories. Caller must own the story.
@@ -58,8 +59,8 @@ const MAX_SPIKE_PAGES = 6;
 // report so we can compare "$ per story" across variants. NOT authoritative
 // — actual billing is tracked vendor-side.
 const COST_PER_IMAGE = {
-  proImage: 0.134, // gemini-3-pro-image-preview at 1K-2K resolution
-  recraftV4: 0.25, // recraftv4 quality tier
+  proImage: 0.134,  // gemini-3-pro-image-preview at 1K-2K resolution
+  recraftV3: 0.04,  // recraftv3 raster generation (style_id is V3-only; ~6x cheaper than V4 quality tier)
 } as const;
 
 interface SpikeVariantPage {
@@ -69,7 +70,7 @@ interface SpikeVariantPage {
 }
 
 interface SpikeVariantResult {
-  variant: 'B-pro-image' | 'C-recraft-v4';
+  variant: 'B-pro-image' | 'C-recraft-v3';
   enabled: boolean;
   /** Reason if disabled (env var off or missing key). */
   disabledReason?: string;
@@ -77,6 +78,13 @@ interface SpikeVariantResult {
   totalLatencyMs: number;
   estimatedCostUSD: number;
   error?: string;
+  /**
+   * FC-019: how art direction was applied for this variant. For Recraft V3
+   * this records whether a custom style_id was created from the FC-013 char
+   * refs (fair test) or we fell back to prompt-only (NOT a fair test) — so
+   * the visual comparison is never silently mis-attributed.
+   */
+  styleNote?: string;
 }
 
 interface SpikeCompareResponse {
@@ -203,8 +211,10 @@ router.post('/compare-story/:storyId', async (req: AuthRequest, res: Response) =
       charRefImages,
     );
 
-    // 4) Variant C: Recraft V4, text baked in (no refs in v1)
-    const variantC: SpikeVariantResult = await runVariantC(storyId, pages, artStyle);
+    // 4) Variant C: Recraft V3 + custom style derived from the SAME FC-013
+    //    character refs used by Variant B. The style locks both art look
+    //    (playful children's-book) and character identity across pages.
+    const variantC: SpikeVariantResult = await runVariantC(storyId, pages, artStyle, charRefImages);
 
     const response: SpikeCompareResponse = {
       storyId,
@@ -290,10 +300,11 @@ async function runVariantC(
   storyId: string,
   pages: Array<{ pageNumber: number; text: string; sceneDescription: string }>,
   artStyle: ArtStyle,
+  charRefImages: ReferenceImage[],
 ): Promise<SpikeVariantResult> {
   if (process.env.SPIKE_USE_RECRAFT !== 'true') {
     return {
-      variant: 'C-recraft-v4',
+      variant: 'C-recraft-v3',
       enabled: false,
       disabledReason: 'SPIKE_USE_RECRAFT env var is not set to "true"',
       pages: [],
@@ -303,7 +314,7 @@ async function runVariantC(
   }
   if (!process.env.RECRAFT_API_KEY) {
     return {
-      variant: 'C-recraft-v4',
+      variant: 'C-recraft-v3',
       enabled: false,
       disabledReason: 'RECRAFT_API_KEY env var is not set',
       pages: [],
@@ -316,33 +327,57 @@ async function runVariantC(
   const startAll = Date.now();
   const variantPages: SpikeVariantPage[] = [];
 
+  // FC-019 refinement: create ONE Recraft V3 custom style from the story's
+  // FC-013 character reference model-sheets (generated character-first when
+  // the story was originally created, persisted as characterReferenceUrls,
+  // loaded into charRefImages above). Passing the resulting style_id to
+  // every page locks BOTH the playful children's-book art look AND character
+  // identity — the V3-only mechanism that V4/V4.1 structurally lack. Failure
+  // is non-fatal: we fall back to prompt-only art direction (the v1 path)
+  // and flag it so the comparison isn't silently mis-attributed.
+  let styleId: string | undefined;
+  let styleNote = 'no char refs available — prompt-only art direction (NOT a fair Recraft test)';
+  if (charRefImages.length > 0) {
+    try {
+      styleId = await createRecraftStyle(
+        charRefImages.map((r) => ({ data: r.data, mimeType: r.mimeType })),
+      );
+      styleNote = `custom style ${styleId} from ${charRefImages.length} char ref(s)`;
+    } catch (e) {
+      console.error('[SPIKE-RECRAFT] createRecraftStyle failed; falling back to prompt-only:', e);
+      styleNote = `style creation FAILED (${e instanceof Error ? e.message : 'Unknown'}) — prompt-only fallback`;
+    }
+  }
+  console.log(`[SPIKE-RECRAFT] Style strategy: ${styleNote}`);
+
   for (const page of pages) {
     const pageStart = Date.now();
-    // Build a text-in-image prompt for Recraft. Recraft V4 treats quoted text
-    // in the prompt as text to render literally.
+    // Text-in-image prompt. Recraft V3 treats quoted text as text to render.
     const prompt = `A ${artStyle} children's picture book illustration. Scene: ${page.sceneDescription}\n\nRender this narration text clearly within the illustration: "${page.text}"\n\nThe text should feel hand-lettered and integrated into the composition, like a real picture book. No speech bubbles. No graphic panels or rectangular cards. Text should feel like part of the artwork.`;
     try {
-      const result = await generateRecraftIllustration(prompt, storyId, page.pageNumber, artStyle);
+      const result = await generateRecraftIllustration(prompt, storyId, page.pageNumber, artStyle, styleId);
       variantPages.push({ pageNumber: page.pageNumber, imageUrl: result.publicUrl, latencyMs: Date.now() - pageStart });
     } catch (e) {
       console.error(`[SPIKE-RECRAFT] Page ${page.pageNumber} threw:`, e);
       return {
-        variant: 'C-recraft-v4',
+        variant: 'C-recraft-v3',
         enabled: true,
         pages: variantPages,
         totalLatencyMs: Date.now() - startAll,
-        estimatedCostUSD: variantPages.length * COST_PER_IMAGE.recraftV4,
+        estimatedCostUSD: variantPages.length * COST_PER_IMAGE.recraftV3,
         error: e instanceof Error ? e.message : 'Unknown',
+        styleNote,
       };
     }
   }
 
   return {
-    variant: 'C-recraft-v4',
+    variant: 'C-recraft-v3',
     enabled: true,
     pages: variantPages,
     totalLatencyMs: Date.now() - startAll,
-    estimatedCostUSD: variantPages.length * COST_PER_IMAGE.recraftV4,
+    estimatedCostUSD: variantPages.length * COST_PER_IMAGE.recraftV3,
+    styleNote,
   };
 }
 
