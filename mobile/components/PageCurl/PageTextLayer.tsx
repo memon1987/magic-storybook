@@ -1,7 +1,6 @@
 import React, { useMemo } from 'react';
 import {
   Group,
-  Paint,
   Paragraph,
   RadialGradient,
   Rect,
@@ -224,7 +223,6 @@ export function PageTextLayer({
         haloY,
         haloW,
         haloH,
-        position: page.textPosition,
       };
     } catch (e) {
       console.warn('PageTextLayer: paragraph build failed, rendering image without overlay', e);
@@ -236,23 +234,31 @@ export function PageTextLayer({
 
   return (
     <Group>
-      {layout.position === 'center-overlay' && (
-        // FC-018: soft radial halo only for center-overlay (the position that
-        // sits over the focal subject by design). Other positions trust the
-        // illustrator's reserved negative space + the shadow stack alone.
-        // Alpha 8C (~55%) at center, 00 at edge, fading organically — replaces
-        // the hard-edged FC-015 rect with a "page got misty here" feel.
-        <Rect x={layout.haloX} y={layout.haloY} width={layout.haloW} height={layout.haloH}>
-          <Paint>
-            <RadialGradient
-              c={{ x: layout.haloX + layout.haloW / 2, y: layout.haloY + layout.haloH / 2 }}
-              r={Math.max(layout.haloW, layout.haloH) / 2}
-              colors={[Skia.Color(haloColor + '8C'), Skia.Color(haloColor + '00')]}
-              positions={[0, 1]}
-            />
-          </Paint>
-        </Rect>
-      )}
+      {/*
+        FC-018: soft radial halo behind text on ALL positions.
+        v1 of FC-018 scoped this to center-overlay only ("most integrated"),
+        but adversarial review (2026-05-16) flagged that the 10-20% of pages
+        where Gemini fails to reserve clean negative space leaves edge positions
+        (top/bottom/left/right) with NO legibility safety net — strictly worse
+        than FC-015's rect. v1.1 restores a halo on all positions: same soft
+        radial gradient that fades organically past the glyph edges, NOT a
+        hard rect. Alpha 8C (~55%) at center, 00 at edge.
+
+        BLOCKER-1 fix: <RadialGradient> is now a DIRECT child of <Rect>, not
+        wrapped in <Paint>. The Skia DSL classifies a <Paint> child as a
+        standalone paint declaration that never binds to the Rect's draw —
+        the gradient would have silently failed to render. Direct-child puts
+        the gradient in the shape's `shaders[]` bucket where it's used as
+        the Rect's fill.
+      */}
+      <Rect x={layout.haloX} y={layout.haloY} width={layout.haloW} height={layout.haloH}>
+        <RadialGradient
+          c={{ x: layout.haloX + layout.haloW / 2, y: layout.haloY + layout.haloH / 2 }}
+          r={Math.max(layout.haloW, layout.haloH) / 2}
+          colors={[Skia.Color(haloColor + '8C'), Skia.Color(haloColor + '00')]}
+          positions={[0, 1]}
+        />
+      </Rect>
       <Paragraph
         paragraph={layout.paragraph}
         x={layout.x}

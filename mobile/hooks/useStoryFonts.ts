@@ -14,9 +14,24 @@ import { useFonts as useSkiaFonts } from '@shopify/react-native-skia';
  * still shows the illustration — text just doesn't appear in the overlay.
  */
 export function useStoryFonts() {
+  // FC-018 (2026-05-16): register multiple weights per family so the
+  // PageTextLayer's base@700 / emph@800 styling resolves to actual loaded
+  // TTFs instead of falling back to the closest available weight. Quicksand
+  // 800 isn't in the @expo-google-fonts/quicksand package; emph words on
+  // Sweet & Simple stories fall back to 700 (the heaviest registered) —
+  // acceptable since emphasis is still differentiated via size + accent color.
   return useSkiaFonts({
-    'Baloo 2': [require('@expo-google-fonts/baloo-2/700Bold/Baloo2_700Bold.ttf')],
-    'Nunito': [require('@expo-google-fonts/nunito/700Bold/Nunito_700Bold.ttf')],
-    'Quicksand': [require('@expo-google-fonts/quicksand/600SemiBold/Quicksand_600SemiBold.ttf')],
+    'Baloo 2': [
+      require('@expo-google-fonts/baloo-2/700Bold/Baloo2_700Bold.ttf'),
+      require('@expo-google-fonts/baloo-2/800ExtraBold/Baloo2_800ExtraBold.ttf'),
+    ],
+    'Nunito': [
+      require('@expo-google-fonts/nunito/700Bold/Nunito_700Bold.ttf'),
+      require('@expo-google-fonts/nunito/800ExtraBold/Nunito_800ExtraBold.ttf'),
+    ],
+    'Quicksand': [
+      require('@expo-google-fonts/quicksand/600SemiBold/Quicksand_600SemiBold.ttf'),
+      require('@expo-google-fonts/quicksand/700Bold/Quicksand_700Bold.ttf'),
+    ],
   });
 }
