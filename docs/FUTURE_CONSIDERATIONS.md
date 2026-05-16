@@ -152,21 +152,6 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
-### FC-018: Playful, integrated narration text (FC-015 refinement)
-
-**Status:** Plan published
-**Size estimate:** M
-**Owner:** Zeshan / Claude
-**Plan file:** `docs/plans/fc-018.md`
-
-**Problem / opportunity:** FC-015's translucent white backing rect behind narration text reads as a UI panel slapped on top of the illustration, not typography integrated into the page. User wants a Dr. Seuss / Pout-Pout Fish feel. Plan: drop the rect entirely; replace legibility with a multi-shadow text stack (warm halo + drop + tight) and a soft radial halo only for `center-overlay` (the worst-case position). Also tighten the illustration prompt's negative-space contract so Gemini stops painting literal white rectangles.
-
-**Open questions:**
-- Should the radial halo extend beyond `center-overlay` to all positions if legibility issues emerge?
-- Font weight uniform across writing styles or per-voice?
-
----
-
 ### FC-017: Story generation reliability — request resumes / async job model
 
 **Status:** Consideration
@@ -279,6 +264,13 @@ Added a new pipeline stage that generates one model-sheet reference image per na
 
 - **Plan:** [docs/plans/fc-013.md](plans/fc-013.md) (adversarial peer review caught 3 HIGH issues including thundering-herd retries and placehold.co URL leakage; all fixed before merge)
 - **PR:** [#7](https://github.com/memon1987/ai-storybook-app/pull/7) (squash-merged as `5f86a8f`)
+
+### FC-018: Playful, integrated narration text (FC-015 refinement) — Done 2026-05-16
+
+Removed FC-015's opaque white rounded-rect backing behind narration text. Replaced with a 3-shadow text stack (warm halo + soft drop + tight near-glyph) on all 5 text positions, plus a soft Skia `<RadialGradient>` halo behind text on every position (alpha-fades organically past glyph edges — NOT a hard rect). Bumped baseline font weight 400 → 700, emphasis 700 → 800, registering the additional TTF weights with Skia so they actually resolve. New `haloColor` palette field (warm cream tint per palette, NEVER pure white). Backend illustration prompt also tightened with explicit NEGATIVE constraints + scoped-to-zone phrasing so Gemini stops painting literal white rectangles inside the illustration AND stops over-suppressing clouds/birds globally.
+
+- **Plan:** [docs/plans/fc-018.md](plans/fc-018.md) (adversarial review caught 1 BLOCKER — RadialGradient nesting wrong in Skia 2.x's DSL — plus 2 HIGHs; all fixed before merge; confirmation review APPROVE-MERGE)
+- **PR:** [#10](https://github.com/memon1987/ai-storybook-app/pull/10) (squash-merged as `9e1f181`)
 
 ### FC-015: Playful text placement (Skia text composition) — Done 2026-05-12
 
