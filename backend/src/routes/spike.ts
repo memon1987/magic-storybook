@@ -3,7 +3,12 @@ import { Firestore } from '@google-cloud/firestore';
 import { authMiddleware } from '../middleware/auth';
 import { AuthRequest, ArtStyle } from '../types';
 import { generateIllustrationPro, ReferenceImage } from '../services/gemini';
-import { generateRecraftIllustration, createRecraftStyle } from '../services/recraft';
+import {
+  generateRecraftIllustration,
+  createRecraftStyle,
+  getRecraftStyleMode,
+  CURATED_CHILD_BOOK_STYLE,
+} from '../services/recraft';
 
 /**
  * FC-019 spike route — dev/owner-only comparison tool. NOT for production use.
@@ -298,7 +303,7 @@ async function runVariantB(
 
 async function runVariantC(
   storyId: string,
-  pages: Array<{ pageNumber: number; text: string; sceneDescription: string }>,
+  pages: Array<{ pageNumber: number; text: string; sceneDescription: string; imageUrl: string }>,
   artStyle: ArtStyle,
   charRefImages: ReferenceImage[],
 ): Promise<SpikeVariantResult> {
@@ -327,25 +332,61 @@ async function runVariantC(
   const startAll = Date.now();
   const variantPages: SpikeVariantPage[] = [];
 
-  // FC-019 refinement: create ONE Recraft V3 custom style from the story's
-  // FC-013 character reference model-sheets (generated character-first when
-  // the story was originally created, persisted as characterReferenceUrls,
-  // loaded into charRefImages above). Passing the resulting style_id to
-  // every page locks BOTH the playful children's-book art look AND character
-  // identity — the V3-only mechanism that V4/V4.1 structurally lack. Failure
-  // is non-fatal: we fall back to prompt-only art direction (the v1 path)
-  // and flag it so the comparison isn't silently mis-attributed.
+  // FC-019 run-3: RECRAFT_STYLE_MODE selects the art-direction strategy so
+  // each config is a separate spike invocation with NO redeploy. Exhausts
+  // the quality/consistency levers before any final decision:
+  //   - 'curated'           → Recraft V3's purpose-built "Child book" style
+  //                           (best aesthetic; chars via prompt only).
+  //   - 'custom_from_pages' → custom style_id from THIS story's rich Gemini
+  //                           page images (encodes the playful aesthetic the
+  //                           user likes + the in-scene characters). Lead
+  //                           hypothesis for fixing the "rudimentary" look.
+  //   - 'custom_from_refs'  → custom style_id from FC-013 white-bg model
+  //                           sheets (run-2 baseline; kept for regression).
+  const mode = getRecraftStyleMode();
   let styleId: string | undefined;
-  let styleNote = 'no char refs available — prompt-only art direction (NOT a fair Recraft test)';
-  if (charRefImages.length > 0) {
-    try {
-      styleId = await createRecraftStyle(
-        charRefImages.map((r) => ({ data: r.data, mimeType: r.mimeType })),
-      );
-      styleNote = `custom style ${styleId} from ${charRefImages.length} char ref(s)`;
-    } catch (e) {
-      console.error('[SPIKE-RECRAFT] createRecraftStyle failed; falling back to prompt-only:', e);
-      styleNote = `style creation FAILED (${e instanceof Error ? e.message : 'Unknown'}) — prompt-only fallback`;
+  let curatedStyle: string | undefined;
+  let styleNote: string;
+
+  if (mode === 'curated') {
+    curatedStyle = CURATED_CHILD_BOOK_STYLE;
+    styleNote = `curated style "${CURATED_CHILD_BOOK_STYLE}" (chars via prompt only — aesthetic-ceiling test)`;
+  } else {
+    // Both custom modes mint ONE style_id, differing only in source images.
+    let srcRefs: Array<{ data: string; mimeType: string }> = [];
+    let srcDesc = '';
+    if (mode === 'custom_from_pages') {
+      // Fetch up to 5 of this story's Gemini page images (the rich aesthetic
+      // the user already likes; they also show the characters in-scene).
+      const pageUrls = pages.map((p) => p.imageUrl).filter(Boolean).slice(0, 5);
+      for (const url of pageUrls) {
+        try {
+          const r = await fetch(url);
+          if (!r.ok) { console.warn(`[SPIKE-RECRAFT] page-style ref ${url} HTTP ${r.status}`); continue; }
+          const buf = Buffer.from(await r.arrayBuffer());
+          let mime = r.headers.get('content-type') ?? 'image/jpeg';
+          if (!mime.startsWith('image/')) mime = 'image/jpeg';
+          srcRefs.push({ data: buf.toString('base64'), mimeType: mime });
+        } catch (e) {
+          console.warn(`[SPIKE-RECRAFT] failed to fetch page-style ref ${url}:`, e);
+        }
+      }
+      srcDesc = `${srcRefs.length} Gemini page image(s)`;
+    } else {
+      srcRefs = charRefImages.map((r) => ({ data: r.data, mimeType: r.mimeType }));
+      srcDesc = `${srcRefs.length} FC-013 char model-sheet(s)`;
+    }
+
+    if (srcRefs.length === 0) {
+      styleNote = `mode=${mode} but ZERO source images — prompt-only fallback (NOT a fair test)`;
+    } else {
+      try {
+        styleId = await createRecraftStyle(srcRefs);
+        styleNote = `mode=${mode}: custom style ${styleId} from ${srcDesc}`;
+      } catch (e) {
+        console.error('[SPIKE-RECRAFT] createRecraftStyle failed; prompt-only fallback:', e);
+        styleNote = `mode=${mode} style creation FAILED (${e instanceof Error ? e.message : 'Unknown'}) — prompt-only fallback`;
+      }
     }
   }
   console.log(`[SPIKE-RECRAFT] Style strategy: ${styleNote}`);
@@ -355,7 +396,7 @@ async function runVariantC(
     // Text-in-image prompt. Recraft V3 treats quoted text as text to render.
     const prompt = `A ${artStyle} children's picture book illustration. Scene: ${page.sceneDescription}\n\nRender this narration text clearly within the illustration: "${page.text}"\n\nThe text should feel hand-lettered and integrated into the composition, like a real picture book. No speech bubbles. No graphic panels or rectangular cards. Text should feel like part of the artwork.`;
     try {
-      const result = await generateRecraftIllustration(prompt, storyId, page.pageNumber, artStyle, styleId);
+      const result = await generateRecraftIllustration(prompt, storyId, page.pageNumber, artStyle, styleId, curatedStyle);
       variantPages.push({ pageNumber: page.pageNumber, imageUrl: result.publicUrl, latencyMs: Date.now() - pageStart });
     } catch (e) {
       console.error(`[SPIKE-RECRAFT] Page ${page.pageNumber} threw:`, e);
