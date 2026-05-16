@@ -152,6 +152,22 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
+### FC-019: Re-evaluate text rendering paradigm (text-in-image spike)
+
+**Status:** Plan approved; spike in progress
+**Size estimate:** M for the spike; L if it leads to a pipeline migration
+**Owner:** Zeshan / Claude
+**Plan file:** `docs/plans/fc-019.md`
+
+**Problem / opportunity:** After shipping FC-015 (Skia overlay) and FC-018 (refined overlay), user feedback is that the overlay paradigm fundamentally doesn't feel "like a true kids book written and illustrated by an author." Real kids' books co-design text + illustration — text is part of the composition, not labeled on top. Plan: backend-only spike comparing current pipeline (Gemini Flash + Skia overlay) vs Gemini 3 Pro Image (text baked in, ~94-96% accuracy, Google's forward image lane) vs Recraft V4 (purpose-built for kids'-book illustration WITH multi-line text — only model with this combo per multiple 2026 benchmarks). Feature-flagged behind env vars; no production traffic touched. Comparison gates the migration decision.
+
+**Open questions:**
+- Will Recraft V4 character consistency hold up when fed Gemini's character refs as style refs?
+- Does Pro Image's latency cost (real ~24-35s/img vs Flash ~12-30s typical) outweigh its 4-6% text-accuracy edge?
+- Is GPT Image 1.5 worth a follow-up spike if Pro + Recraft both fall short?
+
+---
+
 ### FC-017: Story generation reliability — request resumes / async job model
 
 **Status:** Consideration
