@@ -45,7 +45,46 @@ const RECRAFT_BASE_URL = 'https://external.api.recraft.ai/v1';
  */
 const RECRAFT_MODEL = process.env.RECRAFT_MODEL || 'recraftv3';
 const STYLE_BASE = 'digital_illustration'; // base category for custom style creation
-const DEFAULT_SIZE = '1024x1024';
+
+/**
+ * FC-019 spike run-3 quality levers (research 2026-05-16):
+ * The custom-style-from-flat-model-sheets run looked "rudimentary" because
+ * Recraft's custom style learns the aesthetic of whatever it's trained on,
+ * and FC-013 model sheets are flat poses on white. These levers exhaust the
+ * remaining options before any final decision:
+ *
+ * - DEFAULT_SIZE: landscape, not square — storybook pages are landscape and
+ *   composition quality suffers when forced to 1:1.
+ * - ARTISTIC_LEVEL: Recraft `controls.artistic_level` 0-5; 5 = most painterly
+ *   / creative. Default (unset) is conservative.
+ * - NEGATIVE_PROMPT: steer away from the exact failure mode observed.
+ * - CURATED_CHILD_BOOK_STYLE: Recraft V3 ships a purpose-built curated style
+ *   literally named "Child book". `style` (curated) and `style_id` (custom)
+ *   are MUTUALLY EXCLUSIVE per Recraft docs — so we test them as separate
+ *   modes via RECRAFT_STYLE_MODE.
+ */
+const DEFAULT_SIZE = '1707x1024'; // ~16:9.6 landscape, within Recraft's allowed sizes
+const ARTISTIC_LEVEL = 5;
+const NEGATIVE_PROMPT =
+  'flat, simple, rudimentary, low detail, amateurish, minimalist, plain background, coloring-book outline, clip art';
+export const CURATED_CHILD_BOOK_STYLE = 'Child book';
+
+/**
+ * RECRAFT_STYLE_MODE selects how art direction + character anchoring are
+ * applied. Driven by env so each config is a separate spike run with NO
+ * code redeploy between configs:
+ *   - 'curated'           → style:"Child book" (best aesthetic; chars via prompt only)
+ *   - 'custom_from_pages' → custom style_id built from this story's rich
+ *                           Gemini page images (encodes aesthetic + chars)
+ *   - 'custom_from_refs'  → custom style_id from FC-013 model sheets (run-2;
+ *                           kept for regression comparison)
+ */
+export type RecraftStyleMode = 'curated' | 'custom_from_pages' | 'custom_from_refs';
+export function getRecraftStyleMode(): RecraftStyleMode {
+  const m = process.env.RECRAFT_STYLE_MODE;
+  if (m === 'curated' || m === 'custom_from_pages' || m === 'custom_from_refs') return m;
+  return 'custom_from_pages'; // best-hypothesis default
+}
 
 // FC-019 spike fix (post-run-1): Recraft V4 does NOT support the `style` /
 // `substyle` parameters at all — per https://www.recraft.ai/docs/api-reference/styles
@@ -161,6 +200,8 @@ export async function generateRecraftIllustration(
   pageNumber: number,
   style: ArtStyle = 'watercolor',
   styleId?: string,
+  /** When set (and styleId NOT set), use a curated Recraft style name. */
+  curatedStyle?: string,
 ): Promise<RecraftIllustrationResult> {
   const apiKey = process.env.RECRAFT_API_KEY;
   if (!apiKey) {
@@ -168,10 +209,6 @@ export async function generateRecraftIllustration(
   }
 
   const stylePhrase = STYLE_PHRASE[style];
-  // Even with a custom style_id locking the visual identity, keep a short
-  // art-direction phrase in the prompt as reinforcement (Recraft blends
-  // prompt + style). When NO style_id (fallback), the phrase carries all
-  // the art direction.
   const finalPrompt = `${prompt}\n\nArt style: ${stylePhrase}.`;
   const body: Record<string, unknown> = {
     prompt: finalPrompt,
@@ -179,16 +216,26 @@ export async function generateRecraftIllustration(
     n: 1,
     size: DEFAULT_SIZE,
     response_format: 'url',
+    negative_prompt: NEGATIVE_PROMPT,
+    controls: { artistic_level: ARTISTIC_LEVEL },
   };
+  // style_id (custom) and style (curated) are MUTUALLY EXCLUSIVE per Recraft
+  // docs. Prefer the custom style_id when present; otherwise use the curated
+  // style name if given.
   if (styleId) {
-    // style_id (V3-only) locks the visual identity derived from the
-    // story's character refs — solves both playfulness + char consistency.
     body.style_id = styleId;
+  } else if (curatedStyle) {
+    body.style = curatedStyle;
   }
 
+  const styleDesc = styleId
+    ? 'style_id=' + styleId.slice(0, 8)
+    : curatedStyle
+      ? 'curated="' + curatedStyle + '"'
+      : 'prompt-only:' + style;
   const payloadBytes = JSON.stringify(body).length;
   console.log(
-    `[SPIKE-RECRAFT] Generating page ${pageNumber} with ${RECRAFT_MODEL} (${styleId ? 'style_id=' + styleId.slice(0, 8) : 'prompt-only style: ' + style}) [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
+    `[SPIKE-RECRAFT] Generating page ${pageNumber} with ${RECRAFT_MODEL} (${styleDesc}, artistic_level=${ARTISTIC_LEVEL}, size=${DEFAULT_SIZE}) [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
   );
   const startTime = Date.now();
 
