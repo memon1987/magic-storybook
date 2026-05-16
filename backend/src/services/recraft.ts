@@ -44,25 +44,24 @@ const RECRAFT_BASE_URL = 'https://external.api.recraft.ai/v1';
 const RECRAFT_MODEL = process.env.RECRAFT_MODEL || 'recraftv4';
 const DEFAULT_SIZE = '1024x1024';
 
-// Map our ArtStyle to Recraft's style/substyle. Recraft's style library is
-// "design-forward" so we lean on `digital_illustration` for the kids-book
-// substyles and `realistic_image` for the pixar/claymation styles.
+// FC-019 spike fix (post-run-1): Recraft V4 does NOT support the `style` /
+// `substyle` parameters at all — per https://www.recraft.ai/docs/api-reference/styles
+// "Styles are not yet supported for V4 models." (Run 1 returned HTTP 400
+// "Recraft V4 doesn't support style 'digital_illustration_watercolor'".)
+// Only Recraft V2/V3 accept a style enum. V4's design philosophy is fully
+// prompt-driven art direction. So we drop the style fields entirely and
+// describe the art style in the PROMPT instead (the spike route already
+// prefixes "A {artStyle} children's picture book illustration ...").
 //
-// `infantile_sketch` is the V3→V4 kids'-book preset; the others are best-fit
-// matches from Recraft's style library. If Recraft rejects an unknown substyle
-// we fall back to `style` alone (no substyle).
-interface RecraftStyleMapping {
-  style: string;
-  substyle?: string;
-}
-
-const STYLE_MAP: Record<ArtStyle, RecraftStyleMapping> = {
-  'watercolor':         { style: 'digital_illustration', substyle: 'watercolor' },
-  'cartoon':            { style: 'digital_illustration', substyle: 'infantile_sketch' },
-  'storybook-classic':  { style: 'digital_illustration', substyle: 'infantile_sketch' },
-  'claymation':         { style: 'realistic_image',      substyle: 'studio_portrait' },
-  'studio-ghibli':      { style: 'digital_illustration', substyle: 'hand_drawn' },
-  'pixar-3d':           { style: 'realistic_image',      substyle: 'studio_portrait' },
+// A short natural-language art-direction phrase per ArtStyle, appended to
+// the prompt so V4 has explicit style guidance without the unsupported param.
+const STYLE_PHRASE: Record<ArtStyle, string> = {
+  'watercolor':        'soft watercolor children\'s picture-book illustration, gentle washes, hand-painted feel',
+  'cartoon':           'bright flat cartoon children\'s book illustration, bold clean outlines, playful',
+  'storybook-classic': 'classic hand-drawn storybook illustration, warm traditional picture-book style',
+  'claymation':        'claymation / stop-motion clay diorama look, soft sculpted forms',
+  'studio-ghibli':     'Ghibli-inspired hand-drawn animation style, lush painterly backgrounds',
+  'pixar-3d':          'polished 3D animated film style, soft global illumination, expressive characters',
 };
 
 const storage = new Storage();
@@ -99,22 +98,20 @@ export async function generateRecraftIllustration(
     throw new Error('RECRAFT_API_KEY is not set — cannot run Recraft spike variant');
   }
 
-  const mapping = STYLE_MAP[style];
+  // V4 has no style param — append the art-direction phrase to the prompt.
+  const stylePhrase = STYLE_PHRASE[style];
+  const finalPrompt = `${prompt}\n\nArt style: ${stylePhrase}.`;
   const body: Record<string, unknown> = {
-    prompt,
+    prompt: finalPrompt,
     model: RECRAFT_MODEL,
     n: 1,
     size: DEFAULT_SIZE,
     response_format: 'url',
-    style: mapping.style,
   };
-  if (mapping.substyle) {
-    body.substyle = mapping.substyle;
-  }
 
   const payloadBytes = JSON.stringify(body).length;
   console.log(
-    `[SPIKE-RECRAFT] Generating page ${pageNumber} with ${RECRAFT_MODEL} (style=${mapping.style}${mapping.substyle ? '/' + mapping.substyle : ''}) [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
+    `[SPIKE-RECRAFT] Generating page ${pageNumber} with ${RECRAFT_MODEL} (style via prompt: "${style}") [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
   );
   const startTime = Date.now();
 
