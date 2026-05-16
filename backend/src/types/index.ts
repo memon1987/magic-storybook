@@ -114,6 +114,8 @@ export interface StoryDocument {
   status: 'pending' | 'generating' | 'complete' | 'failed';
   pageCount?: number;
   characterReferenceUrls?: Record<string, string>;  // FC-013
+  characterSheets?: CharacterVisualSheet[];         // FC-019: persisted for spike route reload
+  settingIdentity?: SettingVisualIdentity;          // FC-019: persisted for spike route reload
   titlePage?: TitlePage;                            // FC-012
   titlePageImageUrl?: string;                       // FC-012 (Cloud Storage URL)
   createdAt: FirebaseFirestore.Timestamp;
