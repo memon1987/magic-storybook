@@ -70,6 +70,7 @@ export function buildIllustrationPrompt(
   characterReferences?: Array<{ name: string }>,
   textPosition?: TextPosition,
   soundEffects?: string[],
+  emphasizedWords?: string[],
 ): string {
   const styleDesc = STYLE_DESCRIPTIONS[style];
 
@@ -159,22 +160,25 @@ The text MUST be readable in a natural left-to-right, top-to-bottom order. Young
 3. DIALOGUE:
    - Dialogue stays in the main text zone (do NOT use speech bubbles)
    - Show the character speaking through the illustration (open mouth, expressive gesture)
-
+${soundEffects && soundEffects.length > 0 ? `
+4. PLAYFUL SOUND-EFFECT LETTERING (IMPORTANT — this is what makes it feel like a real picture book):
+   - Render these onomatopoeia word(s) as BOLD, LARGE, PLAYFULLY ILLUSTRATED lettering integrated INTO the scene, near the action that makes the sound: ${soundEffects.map((w) => `"${w}"`).join(', ')}
+   - Style them like classic picture books do — Pout-Pout Fish "glub glub glub", Dr. Seuss bouncing onomatopoeia: hand-drawn, expressive, following the motion/energy of the moment (curving, bouncing, dripping, exploding — whatever fits the sound)
+   - Use color, scale, and motion so the sound word is FUN and dramatic — this is separate from the calm narration band and SHOULD stand out
+   - These are SHORT single words; spell them exactly as given` : `
 4. SOUND EFFECTS:
-   - At most ONE onomatopoeia word may ALSO appear in the illustration near the relevant action
-   - Keep it small and complementary, not dominant
-   - The word must still appear in its correct position in the main text zone
+   - None for this page — keep the illustration free of extra onomatopoeia`}
 
-5. EMPHASIS:
-   - Key emotional words can be slightly larger or a different color
-   - But they must remain IN the reading flow — never pulled out to a separate location
+5. EMPHASIS:${emphasizedWords && emphasizedWords.length > 0 ? `
+   - Within the narration, make these key word(s) pop with larger size and/or an accent color so they carry emotional punch: ${emphasizedWords.map((w) => `"${w}"`).join(', ')}
+   - They must remain IN the reading flow (do not pull them to a separate corner), just visually emphasized` : `
+   - Key emotional words can be slightly larger or a different color, but must remain IN the reading flow`}
 
 TEXT STYLING:
-- Clear, rounded, hand-lettered style that is friendly but highly legible
-- Consistent letter sizing for narrative text
-- High contrast between text color and background (dark text on light wash)
-- Large enough to be read comfortably on a phone screen
-- Text should feel like it belongs to the artwork but must prioritize readability`;
+- Narration: clear, rounded, hand-lettered style that is friendly and highly legible (dark text on a soft light wash)
+- Sound-effect words: free to be bold, colorful, and dramatically styled (the playful counterpoint to the calm narration)
+- Large enough to read comfortably on a phone screen
+- Text should feel hand-made and part of the artwork, like a real children's-book illustrator lettered the page`;
   } else {
     textInstructions = `
 IMPORTANT: NO text, words, letters, or numbers in the image`;
