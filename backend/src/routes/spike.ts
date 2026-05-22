@@ -4,6 +4,7 @@ import { authMiddleware } from '../middleware/auth';
 import { AuthRequest, ArtStyle } from '../types';
 import {
   generateIllustrationBaked,
+  generateCastReference,
   ReferenceImage,
   SPIKE_IMAGE_MODEL_PRO,
   SPIKE_IMAGE_MODEL_FLASH,
@@ -191,6 +192,25 @@ router.post('/compare-story/:storyId', async (req: AuthRequest, res: Response) =
     // more good anchors push drift later without ever including a drifted
     // later page. Generalizes to "pin the first K character-forward pages."
     const anchorPages = Math.max(1, Math.min(4, parseInt((req.query.anchorPages as string) || '1', 10) || 1));
+
+    // FC-019: ?castRef=true generates a cast-lineup reference (all characters
+    // together at correct relative scale) and feeds it as a fixed canonical
+    // reference on every page — targets the relative-size drift between
+    // characters. Google's Nano Banana Pro "3-5 reference images" guidance.
+    if (req.query.castRef === 'true' && characterSheets.length > 1) {
+      try {
+        const cast = await generateCastReference(characterSheets, storyId, artStyle);
+        if (cast.imageBase64) {
+          charRefImages.unshift({ type: 'cast', data: cast.imageBase64, mimeType: cast.mimeType });
+          console.log(`[SPIKE] Cast reference added: ${cast.publicUrl}`);
+          warnings.push(`Cast lineup reference generated + used: ${cast.publicUrl}`);
+        } else {
+          warnings.push('Cast reference generation failed; proceeding without it.');
+        }
+      } catch (e) {
+        warnings.push(`Cast reference error: ${e instanceof Error ? e.message : 'Unknown'}`);
+      }
+    }
 
     const variantB = await runGeminiBakedVariant(
       'pro', storyId, pages, artStyle, animalType, characterSheets, settingIdentity, charRefImages, refStrategyMode, anchorPages,

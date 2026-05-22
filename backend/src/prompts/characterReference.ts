@@ -36,6 +36,46 @@ const STYLE_DESCRIPTIONS: Record<ArtStyle, string> = {
  *    image. Page-generation prompts address characters by name in the prompt
  *    body; they don't need to read the name off the multimodal image.)
  */
+/**
+ * FC-019: build a CAST LINEUP reference showing ALL named characters together
+ * at correct relative scale, on a white background. Solves the "relative size
+ * drifts between characters" problem observed in the bakeoff — per-character
+ * model sheets (each alone, each filling its frame) give the model no anchor
+ * for how big the characters are relative to each other, so it re-guesses the
+ * size ratio every page. A single lineup image fixes that ratio.
+ */
+export function buildCastReferencePrompt(
+  characters: Array<{ name: string; description: string }>,
+  style: ArtStyle = 'watercolor',
+): string {
+  const styleDesc = STYLE_DESCRIPTIONS[style];
+  const roster = characters
+    .map((c, i) => `${i + 1}. ${c.name}: ${c.description}`)
+    .join('\n');
+
+  return `Create a CHARACTER CAST LINEUP in ${styleDesc} style.
+
+PURPOSE: a group reference that fixes the RELATIVE SIZE and proportions of all
+characters in this book. This image will anchor how big each character is
+compared to the others across every page.
+
+CHARACTERS (depict ALL of them, standing together in one row):
+${roster}
+
+LAYOUT:
+- Plain white background, no scenery, no props beyond what each character naturally wears or carries
+- All characters standing side by side in a single straight row, full body, facing the viewer, neutral friendly poses
+- CRITICAL: depict each character at their CORRECT RELATIVE HEIGHT AND SIZE based on the descriptions above (e.g. a small animal should be visibly smaller than a child; characters of similar size should match). Their feet should rest on the same ground line so heights are directly comparable.
+- Even spacing between characters; none overlapping
+
+CONSTRAINTS:
+- Each character appears EXACTLY ONCE
+- Identical colors, clothing, proportions, and distinguishing features as their individual descriptions
+- NO scenery, NO speech bubbles, NO text or labels of any kind
+- Style suitable for a children's picture book ages 3-8
+- High clarity — this is a reference image; the size relationships must be unambiguous`;
+}
+
 export function buildCharacterReferencePrompt(
   name: string,
   description: string,
