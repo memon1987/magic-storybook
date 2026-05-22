@@ -62,6 +62,11 @@ const COST_PER_IMAGE = {
   flashImage: 0.067, // gemini-3.1-flash-image-preview
 } as const;
 
+// FC-019 Pro-consistency investigation: how prior rendered pages feed back
+// as references. 'accumulate' can propagate a drifted page (e.g. a close-up);
+// 'canonical' pins page 1 only; 'sheets_only' uses no prior-page refs.
+type RefStrategy = 'accumulate' | 'canonical' | 'sheets_only';
+
 interface SpikeVariantPage {
   pageNumber: number;
   imageUrl: string;
@@ -172,13 +177,23 @@ router.post('/compare-story/:storyId', async (req: AuthRequest, res: Response) =
     };
 
     // Variant B: Gemini 3 Pro Image, baked text, max-consistency refs.
+    // FC-019 Pro-consistency investigation: refStrategy controls how prior
+    // pages are fed to the model. Query param overrides env so all strategies
+    // can be tested with zero redeploys:
+    //   - accumulate (default): model-sheets + last N rendered pages. Risk:
+    //     a drifted page (e.g. a close-up) pollutes the blend — hurts Pro,
+    //     which blends references more aggressively than Flash.
+    //   - canonical: model-sheets + page 1 ONLY (fixed anchor, never drifts).
+    //   - sheets_only: model-sheets alone (isolate whether prior-page refs help).
+    const refStrategyMode = ((req.query.refStrategy as string) || process.env.REF_STRATEGY || 'accumulate') as RefStrategy;
+
     const variantB = await runGeminiBakedVariant(
-      'pro', storyId, pages, artStyle, animalType, characterSheets, settingIdentity, charRefImages,
+      'pro', storyId, pages, artStyle, animalType, characterSheets, settingIdentity, charRefImages, refStrategyMode,
     );
 
-    // Variant C: Gemini 3.1 Flash Image, baked text, max-consistency refs.
+    // Variant C: Gemini 3.1 Flash Image, baked text.
     const variantC = await runGeminiBakedVariant(
-      'flash', storyId, pages, artStyle, animalType, characterSheets, settingIdentity, charRefImages,
+      'flash', storyId, pages, artStyle, animalType, characterSheets, settingIdentity, charRefImages, refStrategyMode,
     );
 
     const response: SpikeCompareResponse = {
@@ -219,6 +234,7 @@ async function runGeminiBakedVariant(
   characterSheets: Array<{ name: string; description: string }>,
   settingIdentity: { name: string; description: string } | undefined,
   charRefImages: ReferenceImage[],
+  refStrategyMode: RefStrategy,
 ): Promise<SpikeVariantResult> {
   const variant = modelKind === 'pro' ? 'B-pro-image' as const : 'C-flash-image' as const;
   const envFlag = modelKind === 'pro' ? 'SPIKE_USE_PRO_IMAGE' : 'SPIKE_USE_FLASH_BAKED';
@@ -229,16 +245,30 @@ async function runGeminiBakedVariant(
   const model = modelKind === 'pro' ? SPIKE_IMAGE_MODEL_PRO : SPIKE_IMAGE_MODEL_FLASH;
   const subdir = modelKind === 'pro' ? 'spike-pro' : 'spike-flash';
   const costPer = modelKind === 'pro' ? COST_PER_IMAGE.proImage : COST_PER_IMAGE.flashImage;
-  const refStrategy = `max-consistency: ${charRefImages.length} char model-sheet(s) + accumulating prior-page chain (last ${MAX_PRIOR_PAGE_REFS}), sequential; playful sound-effect + emphasized-word text enabled`;
+  const refStrategy = `refStrategy=${refStrategyMode}: ${charRefImages.length} char model-sheet(s)` +
+    (refStrategyMode === 'accumulate' ? ` + accumulating prior-page chain (last ${MAX_PRIOR_PAGE_REFS})`
+      : refStrategyMode === 'canonical' ? ' + page-1 canonical anchor only'
+        : ' (no prior-page refs)') +
+    '; sequential; playful sound-effect + emphasized-word text enabled';
 
   console.log(`[SPIKE-${subdir.toUpperCase()}] Starting ${variant}; ${refStrategy}`);
   const startAll = Date.now();
   const variantPages: SpikeVariantPage[] = [];
   const priorPageRefs: ReferenceImage[] = [];
+  let canonicalPage1Ref: ReferenceImage | undefined; // fixed anchor for 'canonical'
 
   for (const page of pages) {
     const pageStart = Date.now();
-    const refs: ReferenceImage[] = [...charRefImages, ...priorPageRefs.slice(-MAX_PRIOR_PAGE_REFS)];
+    // Build the per-page reference set per strategy.
+    let priorRefs: ReferenceImage[];
+    if (refStrategyMode === 'sheets_only') {
+      priorRefs = [];
+    } else if (refStrategyMode === 'canonical') {
+      priorRefs = canonicalPage1Ref ? [canonicalPage1Ref] : [];
+    } else {
+      priorRefs = priorPageRefs.slice(-MAX_PRIOR_PAGE_REFS);
+    }
+    const refs: ReferenceImage[] = [...charRefImages, ...priorRefs];
     try {
       const result = await generateIllustrationBaked(
         page.sceneDescription, animalType, storyId, page.pageNumber, page.text,
@@ -246,9 +276,13 @@ async function runGeminiBakedVariant(
         page.soundEffects, page.emphasizedWords,
       );
       variantPages.push({ pageNumber: page.pageNumber, imageUrl: result.publicUrl, latencyMs: Date.now() - pageStart });
-      // Accumulate this rendered page as an in-scene anchor for later pages.
       if (result.imageBase64) {
+        // Accumulate this rendered page as an in-scene anchor (used by 'accumulate').
         priorPageRefs.push({ type: 'prior_page', pageNumber: page.pageNumber, data: result.imageBase64, mimeType: result.mimeType });
+        // Capture page 1 as the fixed canonical anchor (used by 'canonical').
+        if (!canonicalPage1Ref) {
+          canonicalPage1Ref = { type: 'prior_page', pageNumber: page.pageNumber, data: result.imageBase64, mimeType: result.mimeType };
+        }
       }
     } catch (e) {
       console.error(`[SPIKE-${subdir.toUpperCase()}] Page ${page.pageNumber} threw:`, e);
