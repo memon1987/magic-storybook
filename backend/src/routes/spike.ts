@@ -122,6 +122,8 @@ router.post('/compare-story/:storyId', async (req: AuthRequest, res: Response) =
       text: string;
       sceneDescription: string;
       imageUrl: string;
+      soundEffects?: string[];
+      emphasizedWords?: string[];
     });
 
     const truncated = allPages.length > MAX_SPIKE_PAGES;
@@ -211,7 +213,7 @@ router.post('/compare-story/:storyId', async (req: AuthRequest, res: Response) =
 async function runGeminiBakedVariant(
   modelKind: 'pro' | 'flash',
   storyId: string,
-  pages: Array<{ pageNumber: number; text: string; sceneDescription: string }>,
+  pages: Array<{ pageNumber: number; text: string; sceneDescription: string; soundEffects?: string[]; emphasizedWords?: string[] }>,
   artStyle: ArtStyle,
   animalType: string,
   characterSheets: Array<{ name: string; description: string }>,
@@ -227,7 +229,7 @@ async function runGeminiBakedVariant(
   const model = modelKind === 'pro' ? SPIKE_IMAGE_MODEL_PRO : SPIKE_IMAGE_MODEL_FLASH;
   const subdir = modelKind === 'pro' ? 'spike-pro' : 'spike-flash';
   const costPer = modelKind === 'pro' ? COST_PER_IMAGE.proImage : COST_PER_IMAGE.flashImage;
-  const refStrategy = `max-consistency: ${charRefImages.length} char model-sheet(s) + accumulating prior-page chain (last ${MAX_PRIOR_PAGE_REFS}), sequential`;
+  const refStrategy = `max-consistency: ${charRefImages.length} char model-sheet(s) + accumulating prior-page chain (last ${MAX_PRIOR_PAGE_REFS}), sequential; playful sound-effect + emphasized-word text enabled`;
 
   console.log(`[SPIKE-${subdir.toUpperCase()}] Starting ${variant}; ${refStrategy}`);
   const startAll = Date.now();
@@ -241,6 +243,7 @@ async function runGeminiBakedVariant(
       const result = await generateIllustrationBaked(
         page.sceneDescription, animalType, storyId, page.pageNumber, page.text,
         artStyle, characterSheets, settingIdentity, refs, model, subdir,
+        page.soundEffects, page.emphasizedWords,
       );
       variantPages.push({ pageNumber: page.pageNumber, imageUrl: result.publicUrl, latencyMs: Date.now() - pageStart });
       // Accumulate this rendered page as an in-scene anchor for later pages.

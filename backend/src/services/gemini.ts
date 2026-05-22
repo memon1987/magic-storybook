@@ -428,11 +428,18 @@ export async function generateIllustrationBaked(
   references: ReferenceImage[],
   imageModel: string,
   spikeSubdir: string,
+  soundEffects?: string[],
+  emphasizedWords?: string[],
 ): Promise<IllustrationResult> {
   const characterRefNames = references
     .filter((r) => r.type === 'character')
     .map((r) => ({ name: r.name ?? 'unnamed' }));
 
+  // FC-019 playful-text: legacy baked path (pageText set, textPosition
+  // undefined) now renders soundEffects as bold playful onomatopoeia +
+  // emphasizedWords as accented narration. These were previously omitted
+  // from the bakeoff so it produced flat captions with no picture-book
+  // playfulness (Pout-Pout "glub glub", Dr. Seuss sound words).
   const promptText = buildIllustrationPrompt(
     sceneDescription,
     animalType,
@@ -442,7 +449,8 @@ export async function generateIllustrationBaked(
     settingIdentity,
     characterRefNames,
     /* textPosition */ undefined,
-    /* soundEffects */ undefined,
+    soundEffects,
+    emphasizedWords,
   );
 
   const contents = buildPageContents(references, promptText);
