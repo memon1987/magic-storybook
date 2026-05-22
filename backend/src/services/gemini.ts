@@ -13,7 +13,7 @@ import {
 } from '../types';
 import { buildStoryPrompt } from '../prompts/story';
 import { buildIllustrationPrompt } from '../prompts/illustration';
-import { buildCharacterReferencePrompt } from '../prompts/characterReference';
+import { buildCharacterReferencePrompt, buildCastReferencePrompt } from '../prompts/characterReference';
 import { buildTitlePagePrompt } from '../prompts/titlePage';
 
 // Initialize Gemini client
@@ -237,7 +237,7 @@ interface IllustrationResult {
  * `pageNumber` labels which page it was so the prompt can reference it.
  */
 export interface ReferenceImage {
-  type: 'character' | 'setting' | 'prior_page';
+  type: 'character' | 'setting' | 'prior_page' | 'cast';
   name?: string;
   pageNumber?: number;
   data: string;
@@ -288,6 +288,11 @@ function buildPageContents(
       // and style, not an abstract model sheet.
       contents.push({
         text: `Previous page${ref.pageNumber ? ' ' + ref.pageNumber : ''} of THIS SAME book. CRITICAL: the characters on the new page must look EXACTLY like they do here — identical faces, body shapes, colors, clothing, and proportions. Match this art style, color palette, line quality, and lighting precisely so the book looks like one continuous work by a single illustrator.`,
+      });
+    } else if (ref.type === 'cast') {
+      // FC-019: cast lineup — all characters together at correct relative scale.
+      contents.push({
+        text: 'CAST LINEUP reference: this shows ALL of the book\'s characters together at their CORRECT RELATIVE SIZES. CRITICAL: preserve these size relationships on the page below — each character must be the same size relative to the others as shown here (do not make a small character large or vice versa), and match each character\'s identity exactly.',
       });
     } else {
       contents.push({
@@ -594,6 +599,66 @@ export async function generateCharacterReference(
     imageBase64: null,
     mimeType: 'image/png',
   };
+}
+
+/**
+ * FC-019: Generate a CAST LINEUP reference — all characters together at
+ * correct relative scale on a white background. Fixes the relative-size
+ * drift between characters that per-character model sheets can't (each sheet
+ * shows one character alone, so the model has no size-ratio anchor).
+ * Generated with Flash (cheap, parity with model-sheet generation); the
+ * resulting image is fed as a fixed canonical reference to page generation.
+ */
+export async function generateCastReference(
+  characters: CharacterVisualSheet[],
+  storyId: string,
+  style: ArtStyle = 'watercolor',
+): Promise<CharacterReferenceResult> {
+  const promptText = buildCastReferencePrompt(characters, style);
+  const contents: Array<{ text: string }> = [{ text: promptText }];
+  console.log(`Generating CAST reference (${characters.length} chars: ${characters.map((c) => c.name).join(', ')}) with ${IMAGE_MODEL}...`);
+  const startTime = Date.now();
+
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: IMAGE_MODEL,
+        contents,
+        config: { responseModalities: ['IMAGE'] },
+      });
+      console.log(`Cast reference generated in ${Date.now() - startTime}ms (attempt ${attempt})`);
+      const parts = response.candidates?.[0]?.content?.parts || [];
+      let imageData: string | null = null;
+      let mimeType = 'image/png';
+      for (const part of parts) {
+        if (part.inlineData?.data) {
+          imageData = part.inlineData.data;
+          mimeType = part.inlineData.mimeType || 'image/png';
+          break;
+        }
+      }
+      if (!imageData) {
+        throw new Error('No image data in cast reference response');
+      }
+      const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
+      const filename = `stories/${storyId}/character-refs/cast-${uuid()}.${extension}`;
+      const publicUrl = await uploadGeneratedImage(imageData, mimeType, filename);
+      return { name: '__cast__', publicUrl, imageBase64: imageData, mimeType };
+    } catch (error) {
+      lastError = error;
+      if (isRetryableError(error) && attempt < MAX_RETRIES) {
+        const delayMs = jitteredBackoffMs(attempt);
+        console.log(`Cast ref: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
+        await sleep(delayMs);
+        continue;
+      }
+      console.error(`Failed to generate cast reference after ${attempt} attempts:`, error);
+      break;
+    }
+  }
+  console.error(`All ${MAX_RETRIES} attempts failed for cast reference; last error:`, lastError);
+  return { name: '__cast__', publicUrl: '', imageBase64: null, mimeType: 'image/png' };
 }
 
 /**
