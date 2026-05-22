@@ -230,10 +230,16 @@ interface IllustrationResult {
  * One reference image to attach to a multimodal generation request.
  * `name` is required for type='character' so the prompt can address it
  * by name; setting refs are unnamed (there is at most one per call).
+ *
+ * FC-019 consistency bakeoff: `prior_page` is a previously-rendered page of
+ * THIS story passed as an in-scene character + style anchor for later pages
+ * (a real rendered example, stronger than the abstract white-bg model sheet).
+ * `pageNumber` labels which page it was so the prompt can reference it.
  */
 export interface ReferenceImage {
-  type: 'character' | 'setting';
+  type: 'character' | 'setting' | 'prior_page';
   name?: string;
+  pageNumber?: number;
   data: string;
   mimeType: string;
 }
@@ -275,6 +281,13 @@ function buildPageContents(
       charIdx += 1;
       contents.push({
         text: `Character reference ${charIdx}: "${ref.name ?? 'unnamed'}" — this character must appear identically (same colors, clothing, proportions, distinguishing features) wherever they show up on the page below.`,
+      });
+    } else if (ref.type === 'prior_page') {
+      // FC-019 consistency bakeoff: a real rendered page of THIS book. The
+      // strongest possible anchor — an in-context example of the characters
+      // and style, not an abstract model sheet.
+      contents.push({
+        text: `Previous page${ref.pageNumber ? ' ' + ref.pageNumber : ''} of THIS SAME book. CRITICAL: the characters on the new page must look EXACTLY like they do here — identical faces, body shapes, colors, clothing, and proportions. Match this art style, color palette, line quality, and lighting precisely so the book looks like one continuous work by a single illustrator.`,
       });
     } else {
       contents.push({
@@ -390,37 +403,36 @@ export async function generateIllustration(
 }
 
 /**
- * FC-019 spike: Pro Image variant of `generateIllustration` that bakes the
- * narration text INTO the image (legacy pre-FC-015 path) using the higher-
- * accuracy `gemini-3-pro-image-preview` model (~94-96% text accuracy with
- * multi-line support, vs Flash's ~90% on short strings).
+ * FC-019 spike: bake narration text INTO the image (legacy pre-FC-015 path),
+ * parameterized by model so the consistency bakeoff can compare Gemini 3 Pro
+ * Image vs Gemini 3.1 Flash Image head-to-head with identical inputs.
  *
  * Forces the `pageText` branch of `buildIllustrationPrompt` (text baked in)
- * and OMITS `textPosition` / `soundEffects` (those reserve negative space
- * for the Skia overlay — incompatible with text-in-image). Character
- * references are passed through unchanged so character consistency is
- * still anchored by FC-013's multimodal refs.
+ * and OMITS `textPosition` / `soundEffects` (Skia-overlay-only). Character
+ * references — including FC-019 `prior_page` in-scene anchors — pass through
+ * to `buildPageContents` for maximum cross-page consistency.
  *
- * Output is uploaded to `stories/{id}/spike-pro/page-N-...` so it doesn't
- * collide with the production pipeline's `stories/{id}/page-N-...` paths.
- * Returns the same shape as `generateIllustration` for spike-route compat.
+ * `imageModel` picks the model; `spikeSubdir` keeps Pro vs Flash outputs in
+ * separate Cloud Storage prefixes (`spike-pro/` vs `spike-flash/`). Returns
+ * imageBase64 so the caller can accumulate it as a `prior_page` ref.
  */
-export async function generateIllustrationPro(
+export async function generateIllustrationBaked(
   sceneDescription: string,
   animalType: string,
   storyId: string,
   pageNumber: number,
   pageText: string,
-  style: ArtStyle = 'watercolor',
-  characterSheets?: CharacterVisualSheet[],
-  settingIdentity?: SettingVisualIdentity,
-  references: ReferenceImage[] = [],
+  style: ArtStyle,
+  characterSheets: CharacterVisualSheet[] | undefined,
+  settingIdentity: SettingVisualIdentity | undefined,
+  references: ReferenceImage[],
+  imageModel: string,
+  spikeSubdir: string,
 ): Promise<IllustrationResult> {
   const characterRefNames = references
     .filter((r) => r.type === 'character')
     .map((r) => ({ name: r.name ?? 'unnamed' }));
 
-  // Force legacy text-in-image path: pageText defined, textPosition undefined.
   const promptText = buildIllustrationPrompt(
     sceneDescription,
     animalType,
@@ -435,12 +447,10 @@ export async function generateIllustrationPro(
 
   const contents = buildPageContents(references, promptText);
   const payloadBytes = JSON.stringify(contents).length;
-  const refSummary =
-    references.length === 0
-      ? ''
-      : ` (with ${references.filter((r) => r.type === 'character').length} character ref(s)${references.some((r) => r.type === 'setting') ? ' + setting ref' : ''})`;
+  const tag = `[SPIKE-${spikeSubdir.toUpperCase()}]`;
+  const refSummary = ` (refs: ${references.filter((r) => r.type === 'character').length} char + ${references.filter((r) => r.type === 'prior_page').length} prior-page + ${references.filter((r) => r.type === 'setting').length} setting)`;
   console.log(
-    `[SPIKE-PRO] Generating illustration for page ${pageNumber} with ${IMAGE_MODEL_PRO}${refSummary} [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
+    `${tag} Generating page ${pageNumber} with ${imageModel}${refSummary} [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
   );
   const startTime = Date.now();
 
@@ -449,13 +459,13 @@ export async function generateIllustrationPro(
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       const response = await ai.models.generateContent({
-        model: IMAGE_MODEL_PRO,
+        model: imageModel,
         contents,
         config: { responseModalities: ['IMAGE'] },
       });
 
       const elapsed = Date.now() - startTime;
-      console.log(`[SPIKE-PRO] Illustration for page ${pageNumber} generated in ${elapsed}ms (attempt ${attempt})`);
+      console.log(`${tag} Page ${pageNumber} generated in ${elapsed}ms (attempt ${attempt})`);
 
       const parts = response.candidates?.[0]?.content?.parts || [];
       let imageData: string | null = null;
@@ -468,29 +478,33 @@ export async function generateIllustrationPro(
         }
       }
       if (!imageData) {
-        throw new Error('No image data in Pro generation response');
+        throw new Error(`No image data in ${imageModel} response`);
       }
 
       const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
-      const filename = `stories/${storyId}/spike-pro/page-${pageNumber}-${uuid()}.${extension}`;
+      const filename = `stories/${storyId}/${spikeSubdir}/page-${pageNumber}-${uuid()}.${extension}`;
       const publicUrl = await uploadGeneratedImage(imageData, mimeType, filename);
       return { publicUrl, imageBase64: imageData, mimeType };
     } catch (error) {
       lastError = error;
       if (isRetryableError(error) && attempt < MAX_RETRIES) {
         const delayMs = jitteredBackoffMs(attempt);
-        console.log(`[SPIKE-PRO] Page ${pageNumber}: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
+        console.log(`${tag} Page ${pageNumber}: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
         await sleep(delayMs);
         continue;
       }
-      console.error(`[SPIKE-PRO] Failed to generate page ${pageNumber} after ${attempt} attempts:`, error);
+      console.error(`${tag} Failed to generate page ${pageNumber} after ${attempt} attempts:`, error);
       break;
     }
   }
 
-  console.error(`[SPIKE-PRO] All ${MAX_RETRIES} attempts failed for page ${pageNumber}; last error:`, lastError);
-  return { publicUrl: `https://placehold.co/800x600/png?text=SPIKE-PRO+Failed+Page+${pageNumber}`, imageBase64: null, mimeType: 'image/png' };
+  console.error(`${tag} All ${MAX_RETRIES} attempts failed for page ${pageNumber}; last error:`, lastError);
+  return { publicUrl: `https://placehold.co/800x600/png?text=SPIKE+Failed+Page+${pageNumber}`, imageBase64: null, mimeType: 'image/png' };
 }
+
+// FC-019: exported model constants so the spike route can label variants.
+export const SPIKE_IMAGE_MODEL_PRO = IMAGE_MODEL_PRO;
+export const SPIKE_IMAGE_MODEL_FLASH = IMAGE_MODEL;
 
 /**
  * FC-013: Generate a single character "model sheet" reference image used to
