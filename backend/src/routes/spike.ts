@@ -186,14 +186,19 @@ router.post('/compare-story/:storyId', async (req: AuthRequest, res: Response) =
     //   - canonical: model-sheets + page 1 ONLY (fixed anchor, never drifts).
     //   - sheets_only: model-sheets alone (isolate whether prior-page refs help).
     const refStrategyMode = ((req.query.refStrategy as string) || process.env.REF_STRATEGY || 'accumulate') as RefStrategy;
+    // For 'canonical': how many of the FIRST clean pages to pin as fixed
+    // anchors (default 1 = page 1 only). ?anchorPages=2 pins pages 1 & 2 —
+    // more good anchors push drift later without ever including a drifted
+    // later page. Generalizes to "pin the first K character-forward pages."
+    const anchorPages = Math.max(1, Math.min(4, parseInt((req.query.anchorPages as string) || '1', 10) || 1));
 
     const variantB = await runGeminiBakedVariant(
-      'pro', storyId, pages, artStyle, animalType, characterSheets, settingIdentity, charRefImages, refStrategyMode,
+      'pro', storyId, pages, artStyle, animalType, characterSheets, settingIdentity, charRefImages, refStrategyMode, anchorPages,
     );
 
     // Variant C: Gemini 3.1 Flash Image, baked text.
     const variantC = await runGeminiBakedVariant(
-      'flash', storyId, pages, artStyle, animalType, characterSheets, settingIdentity, charRefImages, refStrategyMode,
+      'flash', storyId, pages, artStyle, animalType, characterSheets, settingIdentity, charRefImages, refStrategyMode, anchorPages,
     );
 
     const response: SpikeCompareResponse = {
@@ -235,6 +240,7 @@ async function runGeminiBakedVariant(
   settingIdentity: { name: string; description: string } | undefined,
   charRefImages: ReferenceImage[],
   refStrategyMode: RefStrategy,
+  anchorPages: number,
 ): Promise<SpikeVariantResult> {
   const variant = modelKind === 'pro' ? 'B-pro-image' as const : 'C-flash-image' as const;
   const envFlag = modelKind === 'pro' ? 'SPIKE_USE_PRO_IMAGE' : 'SPIKE_USE_FLASH_BAKED';
@@ -247,7 +253,7 @@ async function runGeminiBakedVariant(
   const costPer = modelKind === 'pro' ? COST_PER_IMAGE.proImage : COST_PER_IMAGE.flashImage;
   const refStrategy = `refStrategy=${refStrategyMode}: ${charRefImages.length} char model-sheet(s)` +
     (refStrategyMode === 'accumulate' ? ` + accumulating prior-page chain (last ${MAX_PRIOR_PAGE_REFS})`
-      : refStrategyMode === 'canonical' ? ' + page-1 canonical anchor only'
+      : refStrategyMode === 'canonical' ? ` + first-${anchorPages}-page canonical anchor(s)`
         : ' (no prior-page refs)') +
     '; sequential; playful sound-effect + emphasized-word text enabled';
 
@@ -255,7 +261,7 @@ async function runGeminiBakedVariant(
   const startAll = Date.now();
   const variantPages: SpikeVariantPage[] = [];
   const priorPageRefs: ReferenceImage[] = [];
-  let canonicalPage1Ref: ReferenceImage | undefined; // fixed anchor for 'canonical'
+  const canonicalAnchors: ReferenceImage[] = []; // fixed first-K anchors for 'canonical'
 
   for (const page of pages) {
     const pageStart = Date.now();
@@ -264,7 +270,7 @@ async function runGeminiBakedVariant(
     if (refStrategyMode === 'sheets_only') {
       priorRefs = [];
     } else if (refStrategyMode === 'canonical') {
-      priorRefs = canonicalPage1Ref ? [canonicalPage1Ref] : [];
+      priorRefs = canonicalAnchors; // the first `anchorPages` rendered pages, fixed
     } else {
       priorRefs = priorPageRefs.slice(-MAX_PRIOR_PAGE_REFS);
     }
@@ -277,11 +283,12 @@ async function runGeminiBakedVariant(
       );
       variantPages.push({ pageNumber: page.pageNumber, imageUrl: result.publicUrl, latencyMs: Date.now() - pageStart });
       if (result.imageBase64) {
+        const asRef: ReferenceImage = { type: 'prior_page', pageNumber: page.pageNumber, data: result.imageBase64, mimeType: result.mimeType };
         // Accumulate this rendered page as an in-scene anchor (used by 'accumulate').
-        priorPageRefs.push({ type: 'prior_page', pageNumber: page.pageNumber, data: result.imageBase64, mimeType: result.mimeType });
-        // Capture page 1 as the fixed canonical anchor (used by 'canonical').
-        if (!canonicalPage1Ref) {
-          canonicalPage1Ref = { type: 'prior_page', pageNumber: page.pageNumber, data: result.imageBase64, mimeType: result.mimeType };
+        priorPageRefs.push(asRef);
+        // Keep the first `anchorPages` rendered pages as fixed canonical anchors.
+        if (canonicalAnchors.length < anchorPages) {
+          canonicalAnchors.push(asRef);
         }
       }
     } catch (e) {
