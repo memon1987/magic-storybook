@@ -117,8 +117,39 @@ The decision hinges on: does ANY Recraft config reach Gemini's playfulness/chara
 | Recraft V3 text wins but illustration/char consistency worse than Pro | Option C — hybrid (Gemini char refs → Recraft V3 style), or fall back to B |
 | Neither beats the Skia overlay on the "author-made" feel | Stay on FC-018, iterate Skia typography |
 
+## DECISION — Flash + baked text + OCR text-repair (2026-05-22/23)
+
+After Recraft was excluded (user call: Gemini quality preferred), the decision narrowed to **Pro vs Flash, both with text baked in**, judged on a fresh **6-page** story generated from scratch ("Motu and Bear's Big Brave Flight", story `4fba3ab0…`, watercolor, bouncy-rhymes, chars Motu + Bear). Decisive split:
+
+| | Character consistency | Text legibility |
+|---|---|---|
+| **Pro** (gemini-3-pro-image-preview) | **Poor** — the boy changed appearance 3× over 6 pages; even the bear's features drifted. Concluded fundamental: Pro blends references aggressively, so any drifted page pollutes the blend. canonical/anchorPages mitigations did not fix it. | Consistently good |
+| **Flash** (gemini-3.1-flash-image-preview) | **Excellent** — cast-lineup ref + first-2-page canonical anchors held the characters and their relative sizes | Good, but **~10% of pages jumble** (stochastic, not length-driven) |
+
+**Winner: Flash.** Character consistency is the harder, more product-critical problem and Flash already solves it; the text jumble is a narrower, fixable defect. Pro's character drift is not fixable with our reference machinery.
+
+### The text fix: OCR detect-and-regenerate (validated, not assumed)
+
+User direction: "validate the text fix first." We did — and validation overturned the obvious first design.
+
+**Failure mode (page 6, render `35bfb3ff`):** not missing text. Flash rendered the correct narration on the left, then **hallucinated a second gibberish block on the right** — "The star brown, Bear saw saimly in the gad … Toonallery it, too drenist and ever domr evenuting!" Every *intended* word is still present.
+
+**Metric correction:** the first implementation scored **word-recall** (fraction of intended words found by OCR). Recall = **1.00** on that jumble → it would have shipped the garbage. Measured across all **12 historical spike-flash renders** (`backend/scripts/validate-ocr-detector.js`, deterministic, real Vision OCR):
+
+| | recall | precision | lenRatio |
+|---|---|---|---|
+| 11 clean renders | 1.00 | **0.94–1.00** | 1.00–1.10 |
+| 1 jumbled render (`35bfb3ff`) | 1.00 | **0.64** | 1.70 |
+
+**Precision separates them; recall does not.** Final rule: **regenerate when `recall < 0.6` OR `precision < 0.75`** (recall guards the missing/garbled mode that didn't appear here but is real; precision guards the hallucinated/duplicated mode that did). Sound-effect words are folded into the intended set so legitimate onomatopoeia doesn't depress precision.
+
+**Live confirmation** (deployed revision, `?verifyText=true`, 6-page run): 6/6 pages passed on attempt 1, recall ≥ 0.97 / precision ≥ 0.94, no false positives, no OCR errors, HTTP 200 in 122 s. The jumble is stochastic so it didn't recur live — the deterministic script above is the proof that a real jumble is caught.
+
+Shipped in PR #20. Mechanics now proven → productionize in **FC-020**.
+
 ## Open items
 
-- Variant C V3 fair re-run (next).
-- Latency footnote: spike runs variants **sequentially**; production `generateAllIllustrations` is parallel, so per-story wall-clock in production would be ~N/concurrency faster than the numbers here.
-- Storage cleanup: spike outputs accumulate at `stories/*/spike-{pro,recraft}/`. Add a `gsutil rm` step or lifecycle rule once the decision lands.
+- **FC-020 (next):** migrate production `generateAllIllustrations` to Flash + baked text + cast-lineup + pin-first-K canonical anchors + OCR text-repair; remove FC-015/018 Skia overlay machinery; address the 600 s synchronous-request ceiling (relates to FC-017 async job model — text-verify regenerations add latency).
+- Latency footnote: spike runs variants **sequentially**; production `generateAllIllustrations` is parallel. But OCR text-repair forces a partial serialization (a page can't be accepted until its OCR returns), and regenerations add 1–2 extra image-gens to ~10% of pages — FC-020 must budget for this against the 600 s timeout.
+- Storage cleanup: spike outputs at `stories/*/spike-{pro,recraft,flash}/` + extra `character-refs/cast-*`. `gsutil rm` once FC-020 lands.
+- Spike env flags (`SPIKE_*`) + the unused `RECRAFT_API_KEY` secret to be torn down post-FC-020.
