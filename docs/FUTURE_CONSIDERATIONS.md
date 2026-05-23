@@ -39,6 +39,33 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ## Active Considerations
 
+### FC-020: Migrate production to baked-in text + OCR text-repair; delete Skia overlay
+
+**Status:** Plan drafted — awaiting approval
+**Size estimate:** L
+**Owner:** Zeshan / Claude
+**Plan file:** `docs/plans/fc-020.md`
+
+**Problem / opportunity:** FC-019's spike decided production should bake narration text INTO the
+illustration (Gemini 3.1 Flash) — anchored by the FC-013 character machinery (model-sheets + cast
+lineup + pin-first-K canonical anchors) and guarded by OCR detect-and-regenerate for Flash's ~10%
+stochastic text jumbles (recall ≥ 0.6 AND precision ≥ 0.75; precision is what catches the
+hallucinated-extra-text failure mode). Pro was rejected for unfixable character drift. This FC
+promotes those proven mechanics into the production `generateAllIllustrations` path and **fully
+deletes** the FC-015/FC-018 Skia overlay code (user decision: no flag, no fallback). Shipped
+**synchronously** now (Option C); the durable 600 s timeout fix is deferred to FC-017 (async job
+model), which lands as the next FC in sequence.
+
+**Key decisions baked in:** existing stories won't be back-filled (internal-testing-only app, so
+the blank-gap break is acceptable); first-K pages generated sequentially then the rest in parallel
+(timeout lever); production attempt cap 2; a backend test framework (Vitest) is stood up since this
+is a production behavior change.
+
+**Open questions:** production attempt cap 2 vs 3; canonical-anchor K fixed at 2 vs scale with
+length; parallel-batch concurrency cap (from the 12-page integration test).
+
+---
+
 ### FC-003: Text-to-speech narration
 
 **Status:** Consideration
@@ -154,8 +181,10 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ### FC-019: Re-evaluate text rendering paradigm (text-in-image spike)
 
-**Status:** Plan approved; spike in progress
-**Size estimate:** M for the spike; L if it leads to a pipeline migration
+**Status:** Spike complete (PRs #15–#20 merged). **Decision: bake text into the image (Flash) +
+OCR detect-and-regenerate; reject Pro (char drift); exclude Recraft.** Productionization tracked in
+**FC-020**. See `docs/investigations/fc-019-text-paradigm-comparison-2026-05-16.md`.
+**Size estimate:** M for the spike; L for the migration (FC-020)
 **Owner:** Zeshan / Claude
 **Plan file:** `docs/plans/fc-019.md`
 
