@@ -40,30 +40,56 @@ function wordTokens(s: string): string[] {
   return s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 1);
 }
 
+export interface BakedTextScore {
+  recall: number;    // fraction of intended words present in the OCR output
+  precision: number; // fraction of OCR'd words that were intended
+}
+
 /**
- * OCR the image and score how much of the intended narration text actually
- * rendered. Returns word-recall (0..1): fraction of intended words present in
- * the OCR output. Jumbled/garbled renders score near 0; clean renders ~0.7-1.0.
- * Hand-lettered text OCRs imperfectly, so the pass threshold is lenient (0.6).
- * On OCR error returns 1 (fail open — never block a page on an OCR outage).
+ * OCR the image and score the baked narration against the intended text on TWO
+ * axes (FC-019 — validated against historical renders):
+ *
+ *  - recall    catches MISSING / garbled text: intended words that didn't render.
+ *  - precision catches HALLUCINATED / duplicated text: the dominant Flash failure
+ *    we observed was a second gibberish text block ("Toonallery it, too drenist")
+ *    rendered alongside the correct one — recall stays 1.0 there, so recall alone
+ *    misses it; precision drops (jumble≈0.64 vs clean≥0.94 across 12 renders).
+ *
+ * `intendedText` must already include any sound-effect words (they are legitimately
+ * rendered, so excluding them would tank precision on clean pages). On OCR error
+ * returns perfect scores (fail open — never block a page on an OCR outage).
  */
-async function scoreBakedText(imageBase64: string, intendedText: string): Promise<number> {
+async function scoreBakedText(imageBase64: string, intendedText: string): Promise<BakedTextScore> {
   const intended = wordTokens(intendedText);
-  if (intended.length === 0) return 1;
+  if (intended.length === 0) return { recall: 1, precision: 1 };
+  const intendedSet = new Set(intended);
   try {
     const [result] = await visionClient().textDetection({ image: { content: imageBase64 } });
     const detected = result.fullTextAnnotation?.text ?? result.textAnnotations?.[0]?.description ?? '';
     const detectedSet = new Set(wordTokens(detected));
-    const found = intended.filter((w) => detectedSet.has(w)).length;
-    return found / intended.length;
+    if (detectedSet.size === 0) return { recall: 0, precision: 0 };
+    const recall = [...intendedSet].filter((w) => detectedSet.has(w)).length / intendedSet.size;
+    const precision = [...detectedSet].filter((w) => intendedSet.has(w)).length / detectedSet.size;
+    return { recall, precision };
   } catch (e) {
     console.warn('[TEXT-VERIFY] OCR failed, failing open (treating as pass):', e);
-    return 1;
+    return { recall: 1, precision: 1 };
   }
 }
 
-const TEXT_MATCH_THRESHOLD = 0.6;   // below this = jumbled → regenerate
+// Detection thresholds (FC-019, validated on 12 historical renders: 11 clean
+// at precision 0.94-1.00, 1 jumble at precision 0.64). A page is regenerated
+// when EITHER axis fails. F1 ranks candidates when none fully pass.
+const TEXT_RECALL_MIN = 0.6;
+const TEXT_PRECISION_MIN = 0.75;
 const MAX_TEXT_GEN_ATTEMPTS = 3;    // total generations per page when verifyText is on
+
+function bakedTextPasses(s: BakedTextScore): boolean {
+  return s.recall >= TEXT_RECALL_MIN && s.precision >= TEXT_PRECISION_MIN;
+}
+function bakedTextF1(s: BakedTextScore): number {
+  return s.precision + s.recall ? (2 * s.precision * s.recall) / (s.precision + s.recall) : 0;
+}
 
 // Model constants
 // Text: gemini-3-flash-preview
@@ -263,8 +289,10 @@ interface IllustrationResult {
   publicUrl: string;
   imageBase64: string | null;
   mimeType: string;
-  // FC-019 text-verify: populated when verifyText is on.
-  textMatchScore?: number;   // 0..1 word-recall of intended text in the OCR
+  // FC-019 text-verify: populated when verifyText is on. Both axes of the
+  // OCR check on the kept candidate (see scoreBakedText).
+  textRecall?: number;       // fraction of intended words present in the OCR
+  textPrecision?: number;    // fraction of OCR'd words that were intended
   textGenAttempts?: number;  // how many generations it took to pass the check
 }
 
@@ -559,12 +587,16 @@ export async function generateIllustrationBaked(
   };
 
   // FC-019 text-verify: when verifyText is on, wrap generation in an outer
-  // regenerate loop. Each pass produces a candidate; if OCR word-recall of the
-  // intended narration falls below TEXT_MATCH_THRESHOLD (jumbled/garbled text,
-  // e.g. the page-6 jumble we observed), regenerate up to MAX_TEXT_GEN_ATTEMPTS.
-  // We keep the BEST-scoring candidate so a later worse roll never wins.
+  // regenerate loop. Each pass produces a candidate scored on recall +
+  // precision (see scoreBakedText). A page regenerates when EITHER axis fails
+  // — recall<min (missing/garbled words) OR precision<min (hallucinated/
+  // duplicated gibberish, the page-6 failure we observed). Up to
+  // MAX_TEXT_GEN_ATTEMPTS; we keep the highest-F1 candidate so a later worse
+  // roll never wins. Sound-effect words are folded into the intended set so
+  // they don't read as "extra" and depress precision on clean pages.
+  const intendedForOcr = [pageText, ...(soundEffects ?? [])].join(' ');
   const maxGenAttempts = verifyText ? MAX_TEXT_GEN_ATTEMPTS : 1;
-  let best: { imageData: string; mimeType: string; score: number } | null = null;
+  let best: { imageData: string; mimeType: string; score: BakedTextScore; f1: number } | null = null;
   let genAttemptsUsed = 0;
 
   for (let genAttempt = 1; genAttempt <= maxGenAttempts; genAttempt++) {
@@ -573,16 +605,18 @@ export async function generateIllustrationBaked(
     genAttemptsUsed = genAttempt;
 
     if (!verifyText) {
-      best = { ...produced, score: NaN };
+      best = { ...produced, score: { recall: NaN, precision: NaN }, f1: NaN };
       break;
     }
 
-    const score = await scoreBakedText(produced.imageData, pageText);
+    const score = await scoreBakedText(produced.imageData, intendedForOcr);
+    const f1 = bakedTextF1(score);
     console.log(
-      `${tag} Page ${pageNumber} text-verify score=${score.toFixed(2)} (gen ${genAttempt}/${maxGenAttempts}, threshold ${TEXT_MATCH_THRESHOLD})`,
+      `${tag} Page ${pageNumber} text-verify recall=${score.recall.toFixed(2)} precision=${score.precision.toFixed(2)} ` +
+      `(gen ${genAttempt}/${maxGenAttempts}, min recall ${TEXT_RECALL_MIN}/precision ${TEXT_PRECISION_MIN})`,
     );
-    if (!best || score > best.score) best = { ...produced, score };
-    if (score >= TEXT_MATCH_THRESHOLD) break;
+    if (!best || f1 > best.f1) best = { ...produced, score, f1 };
+    if (bakedTextPasses(score)) break;
     if (genAttempt < maxGenAttempts) {
       console.log(`${tag} Page ${pageNumber} text below threshold — regenerating...`);
     }
@@ -596,7 +630,9 @@ export async function generateIllustrationBaked(
       publicUrl,
       imageBase64: best.imageData,
       mimeType: best.mimeType,
-      ...(verifyText ? { textMatchScore: best.score, textGenAttempts: genAttemptsUsed } : {}),
+      ...(verifyText
+        ? { textRecall: best.score.recall, textPrecision: best.score.precision, textGenAttempts: genAttemptsUsed }
+        : {}),
     };
   }
 

@@ -72,10 +72,12 @@ interface SpikeVariantPage {
   pageNumber: number;
   imageUrl: string;
   latencyMs: number;
-  // FC-019 text-verify: present only when ?verifyText=true. OCR word-recall of
-  // the intended narration (0..1) and how many generations the page took to
-  // pass TEXT_MATCH_THRESHOLD (or hit the attempt cap).
-  textMatchScore?: number;
+  // FC-019 text-verify: present only when ?verifyText=true. OCR recall +
+  // precision of the intended narration (0..1) and how many generations the
+  // page took to pass (or hit the attempt cap). precision<0.75 is the signal
+  // that catches hallucinated/duplicated text; recall<0.6 catches missing text.
+  textRecall?: number;
+  textPrecision?: number;
   textGenAttempts?: number;
 }
 
@@ -321,7 +323,8 @@ async function runGeminiBakedVariant(
         pageNumber: page.pageNumber,
         imageUrl: result.publicUrl,
         latencyMs: Date.now() - pageStart,
-        ...(result.textMatchScore !== undefined ? { textMatchScore: result.textMatchScore } : {}),
+        ...(result.textRecall !== undefined ? { textRecall: result.textRecall } : {}),
+        ...(result.textPrecision !== undefined ? { textPrecision: result.textPrecision } : {}),
         ...(result.textGenAttempts !== undefined ? { textGenAttempts: result.textGenAttempts } : {}),
       });
       if (result.imageBase64) {
