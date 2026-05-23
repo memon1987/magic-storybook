@@ -11,6 +11,7 @@ import {
   TextPosition,
   TEXT_POSITIONS,
 } from '../types';
+import { ImageAnnotatorClient } from '@google-cloud/vision';
 import { buildStoryPrompt } from '../prompts/story';
 import { buildIllustrationPrompt } from '../prompts/illustration';
 import { buildCharacterReferencePrompt, buildCastReferencePrompt } from '../prompts/characterReference';
@@ -25,6 +26,44 @@ const ai = new GoogleGenAI({
 const storage = new Storage();
 const bucketName = process.env.STORAGE_BUCKET!;
 const bucket = storage.bucket(bucketName);
+
+// FC-019 text-verify: Cloud Vision client for OCR-based baked-text validation.
+// Lazily constructed so non-spike paths don't pay the init cost.
+let _vision: ImageAnnotatorClient | null = null;
+function visionClient(): ImageAnnotatorClient {
+  if (!_vision) _vision = new ImageAnnotatorClient();
+  return _vision;
+}
+
+/** Normalize text to a set of comparable lowercase alphanumeric word tokens. */
+function wordTokens(s: string): string[] {
+  return s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 1);
+}
+
+/**
+ * OCR the image and score how much of the intended narration text actually
+ * rendered. Returns word-recall (0..1): fraction of intended words present in
+ * the OCR output. Jumbled/garbled renders score near 0; clean renders ~0.7-1.0.
+ * Hand-lettered text OCRs imperfectly, so the pass threshold is lenient (0.6).
+ * On OCR error returns 1 (fail open — never block a page on an OCR outage).
+ */
+async function scoreBakedText(imageBase64: string, intendedText: string): Promise<number> {
+  const intended = wordTokens(intendedText);
+  if (intended.length === 0) return 1;
+  try {
+    const [result] = await visionClient().textDetection({ image: { content: imageBase64 } });
+    const detected = result.fullTextAnnotation?.text ?? result.textAnnotations?.[0]?.description ?? '';
+    const detectedSet = new Set(wordTokens(detected));
+    const found = intended.filter((w) => detectedSet.has(w)).length;
+    return found / intended.length;
+  } catch (e) {
+    console.warn('[TEXT-VERIFY] OCR failed, failing open (treating as pass):', e);
+    return 1;
+  }
+}
+
+const TEXT_MATCH_THRESHOLD = 0.6;   // below this = jumbled → regenerate
+const MAX_TEXT_GEN_ATTEMPTS = 3;    // total generations per page when verifyText is on
 
 // Model constants
 // Text: gemini-3-flash-preview
@@ -224,6 +263,9 @@ interface IllustrationResult {
   publicUrl: string;
   imageBase64: string | null;
   mimeType: string;
+  // FC-019 text-verify: populated when verifyText is on.
+  textMatchScore?: number;   // 0..1 word-recall of intended text in the OCR
+  textGenAttempts?: number;  // how many generations it took to pass the check
 }
 
 /**
@@ -435,6 +477,7 @@ export async function generateIllustrationBaked(
   spikeSubdir: string,
   soundEffects?: string[],
   emphasizedWords?: string[],
+  verifyText?: boolean,
 ): Promise<IllustrationResult> {
   const characterRefNames = references
     .filter((r) => r.type === 'character')
@@ -467,51 +510,96 @@ export async function generateIllustrationBaked(
   );
   const startTime = Date.now();
 
-  let lastError: unknown = null;
+  // Inner generation with the existing 503 exponential-backoff retry. Returns
+  // the raw image bytes (not uploaded yet) so the outer verify loop can OCR a
+  // candidate before deciding whether to keep or regenerate it. Returns null
+  // only when all 503 retries are exhausted (infra failure — regenerating for
+  // text quality won't help, so the outer loop stops on null).
+  const generateOnce = async (): Promise<{ imageData: string; mimeType: string } | null> => {
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model: imageModel,
+          contents,
+          config: { responseModalities: ['IMAGE'] },
+        });
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const response = await ai.models.generateContent({
-        model: imageModel,
-        contents,
-        config: { responseModalities: ['IMAGE'] },
-      });
+        const elapsed = Date.now() - startTime;
+        console.log(`${tag} Page ${pageNumber} generated in ${elapsed}ms (attempt ${attempt})`);
 
-      const elapsed = Date.now() - startTime;
-      console.log(`${tag} Page ${pageNumber} generated in ${elapsed}ms (attempt ${attempt})`);
-
-      const parts = response.candidates?.[0]?.content?.parts || [];
-      let imageData: string | null = null;
-      let mimeType = 'image/png';
-      for (const part of parts) {
-        if (part.inlineData?.data) {
-          imageData = part.inlineData.data;
-          mimeType = part.inlineData.mimeType || 'image/png';
-          break;
+        const parts = response.candidates?.[0]?.content?.parts || [];
+        let imageData: string | null = null;
+        let mimeType = 'image/png';
+        for (const part of parts) {
+          if (part.inlineData?.data) {
+            imageData = part.inlineData.data;
+            mimeType = part.inlineData.mimeType || 'image/png';
+            break;
+          }
         }
+        if (!imageData) {
+          throw new Error(`No image data in ${imageModel} response`);
+        }
+        return { imageData, mimeType };
+      } catch (error) {
+        lastError = error;
+        if (isRetryableError(error) && attempt < MAX_RETRIES) {
+          const delayMs = jitteredBackoffMs(attempt);
+          console.log(`${tag} Page ${pageNumber}: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
+          await sleep(delayMs);
+          continue;
+        }
+        console.error(`${tag} Failed to generate page ${pageNumber} after ${attempt} attempts:`, error);
+        break;
       }
-      if (!imageData) {
-        throw new Error(`No image data in ${imageModel} response`);
-      }
+    }
+    console.error(`${tag} All ${MAX_RETRIES} attempts failed for page ${pageNumber}; last error:`, lastError);
+    return null;
+  };
 
-      const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
-      const filename = `stories/${storyId}/${spikeSubdir}/page-${pageNumber}-${uuid()}.${extension}`;
-      const publicUrl = await uploadGeneratedImage(imageData, mimeType, filename);
-      return { publicUrl, imageBase64: imageData, mimeType };
-    } catch (error) {
-      lastError = error;
-      if (isRetryableError(error) && attempt < MAX_RETRIES) {
-        const delayMs = jitteredBackoffMs(attempt);
-        console.log(`${tag} Page ${pageNumber}: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
-        await sleep(delayMs);
-        continue;
-      }
-      console.error(`${tag} Failed to generate page ${pageNumber} after ${attempt} attempts:`, error);
+  // FC-019 text-verify: when verifyText is on, wrap generation in an outer
+  // regenerate loop. Each pass produces a candidate; if OCR word-recall of the
+  // intended narration falls below TEXT_MATCH_THRESHOLD (jumbled/garbled text,
+  // e.g. the page-6 jumble we observed), regenerate up to MAX_TEXT_GEN_ATTEMPTS.
+  // We keep the BEST-scoring candidate so a later worse roll never wins.
+  const maxGenAttempts = verifyText ? MAX_TEXT_GEN_ATTEMPTS : 1;
+  let best: { imageData: string; mimeType: string; score: number } | null = null;
+  let genAttemptsUsed = 0;
+
+  for (let genAttempt = 1; genAttempt <= maxGenAttempts; genAttempt++) {
+    const produced = await generateOnce();
+    if (!produced) break; // infra failure — stop, regeneration won't help
+    genAttemptsUsed = genAttempt;
+
+    if (!verifyText) {
+      best = { ...produced, score: NaN };
       break;
+    }
+
+    const score = await scoreBakedText(produced.imageData, pageText);
+    console.log(
+      `${tag} Page ${pageNumber} text-verify score=${score.toFixed(2)} (gen ${genAttempt}/${maxGenAttempts}, threshold ${TEXT_MATCH_THRESHOLD})`,
+    );
+    if (!best || score > best.score) best = { ...produced, score };
+    if (score >= TEXT_MATCH_THRESHOLD) break;
+    if (genAttempt < maxGenAttempts) {
+      console.log(`${tag} Page ${pageNumber} text below threshold — regenerating...`);
     }
   }
 
-  console.error(`${tag} All ${MAX_RETRIES} attempts failed for page ${pageNumber}; last error:`, lastError);
+  if (best) {
+    const extension = best.mimeType.includes('jpeg') || best.mimeType.includes('jpg') ? 'jpg' : 'png';
+    const filename = `stories/${storyId}/${spikeSubdir}/page-${pageNumber}-${uuid()}.${extension}`;
+    const publicUrl = await uploadGeneratedImage(best.imageData, best.mimeType, filename);
+    return {
+      publicUrl,
+      imageBase64: best.imageData,
+      mimeType: best.mimeType,
+      ...(verifyText ? { textMatchScore: best.score, textGenAttempts: genAttemptsUsed } : {}),
+    };
+  }
+
   return { publicUrl: `https://placehold.co/800x600/png?text=SPIKE+Failed+Page+${pageNumber}`, imageBase64: null, mimeType: 'image/png' };
 }
 

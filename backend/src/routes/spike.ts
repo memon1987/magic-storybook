@@ -72,6 +72,11 @@ interface SpikeVariantPage {
   pageNumber: number;
   imageUrl: string;
   latencyMs: number;
+  // FC-019 text-verify: present only when ?verifyText=true. OCR word-recall of
+  // the intended narration (0..1) and how many generations the page took to
+  // pass TEXT_MATCH_THRESHOLD (or hit the attempt cap).
+  textMatchScore?: number;
+  textGenAttempts?: number;
 }
 
 interface SpikeVariantResult {
@@ -212,13 +217,22 @@ router.post('/compare-story/:storyId', async (req: AuthRequest, res: Response) =
       }
     }
 
+    // FC-019 text-verify: ?verifyText=true turns on OCR-based detect-and-
+    // regenerate (the page-6 jumble fix). Applied to BOTH variants — Flash to
+    // catch its stochastic text jumbles, Pro as a control (its text is already
+    // good, so it should pass on the first generation with no extra cost).
+    const verifyText = req.query.verifyText === 'true';
+    if (verifyText) {
+      warnings.push('Text-verify ON: OCR word-recall < 0.6 triggers up to 3 regenerations per page (best-scoring kept).');
+    }
+
     const variantB = await runGeminiBakedVariant(
-      'pro', storyId, pages, artStyle, animalType, characterSheets, settingIdentity, charRefImages, refStrategyMode, anchorPages,
+      'pro', storyId, pages, artStyle, animalType, characterSheets, settingIdentity, charRefImages, refStrategyMode, anchorPages, verifyText,
     );
 
     // Variant C: Gemini 3.1 Flash Image, baked text.
     const variantC = await runGeminiBakedVariant(
-      'flash', storyId, pages, artStyle, animalType, characterSheets, settingIdentity, charRefImages, refStrategyMode, anchorPages,
+      'flash', storyId, pages, artStyle, animalType, characterSheets, settingIdentity, charRefImages, refStrategyMode, anchorPages, verifyText,
     );
 
     const response: SpikeCompareResponse = {
@@ -261,6 +275,7 @@ async function runGeminiBakedVariant(
   charRefImages: ReferenceImage[],
   refStrategyMode: RefStrategy,
   anchorPages: number,
+  verifyText: boolean,
 ): Promise<SpikeVariantResult> {
   const variant = modelKind === 'pro' ? 'B-pro-image' as const : 'C-flash-image' as const;
   const envFlag = modelKind === 'pro' ? 'SPIKE_USE_PRO_IMAGE' : 'SPIKE_USE_FLASH_BAKED';
@@ -275,7 +290,8 @@ async function runGeminiBakedVariant(
     (refStrategyMode === 'accumulate' ? ` + accumulating prior-page chain (last ${MAX_PRIOR_PAGE_REFS})`
       : refStrategyMode === 'canonical' ? ` + first-${anchorPages}-page canonical anchor(s)`
         : ' (no prior-page refs)') +
-    '; sequential; playful sound-effect + emphasized-word text enabled';
+    '; sequential; playful sound-effect + emphasized-word text enabled' +
+    (verifyText ? '; OCR text-verify ON (regenerate < 0.6)' : '');
 
   console.log(`[SPIKE-${subdir.toUpperCase()}] Starting ${variant}; ${refStrategy}`);
   const startAll = Date.now();
@@ -299,9 +315,15 @@ async function runGeminiBakedVariant(
       const result = await generateIllustrationBaked(
         page.sceneDescription, animalType, storyId, page.pageNumber, page.text,
         artStyle, characterSheets, settingIdentity, refs, model, subdir,
-        page.soundEffects, page.emphasizedWords,
+        page.soundEffects, page.emphasizedWords, verifyText,
       );
-      variantPages.push({ pageNumber: page.pageNumber, imageUrl: result.publicUrl, latencyMs: Date.now() - pageStart });
+      variantPages.push({
+        pageNumber: page.pageNumber,
+        imageUrl: result.publicUrl,
+        latencyMs: Date.now() - pageStart,
+        ...(result.textMatchScore !== undefined ? { textMatchScore: result.textMatchScore } : {}),
+        ...(result.textGenAttempts !== undefined ? { textGenAttempts: result.textGenAttempts } : {}),
+      });
       if (result.imageBase64) {
         const asRef: ReferenceImage = { type: 'prior_page', pageNumber: page.pageNumber, data: result.imageBase64, mimeType: result.mimeType };
         // Accumulate this rendered page as an in-scene anchor (used by 'accumulate').
