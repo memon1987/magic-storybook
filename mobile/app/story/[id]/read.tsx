@@ -25,7 +25,6 @@ import { AnimatedPressable } from '../../../components/AnimatedPressable';
 import { SplashScreenAnimated } from '../../../components/SplashScreenAnimated';
 import { Curl, type TapZone } from '../../../components/PageCurl/Curl';
 import { usePageImages } from '../../../components/PageCurl/usePageImages';
-import { useStoryFonts } from '../../../hooks/useStoryFonts';
 
 const CONTROLS_TIMEOUT_MS = 4000;
 
@@ -71,11 +70,6 @@ export default function ReadScreen() {
     || height > width;
 
   const pageImages = usePageImages(pages, currentPage);
-
-  // FC-015: Skia font provider for the narration overlay. `null` until fonts
-  // are loaded; PageTextLayer treats `null` as "render nothing" so the user
-  // sees illustrations immediately and text pops in once fonts are registered.
-  const fontMgr = useStoryFonts();
 
   useEffect(() => {
     let cancelled = false;
@@ -178,6 +172,7 @@ export default function ReadScreen() {
 
   return (
     <View style={styles.container}>
+      {/* FC-020: narration is baked into each illustration; Curl just renders + curls images. */}
       <Curl
         width={width}
         height={height}
@@ -187,17 +182,6 @@ export default function ReadScreen() {
         totalPages={pages.length}
         onPageChange={handlePageChange}
         onTap={handleTap}
-        // FC-015: pass page data + writing style + Skia fonts so the curl
-        // composites narration text with the page image. Cover (synthesized
-        // page-0 in `pages`) has no `textPosition`, so its overlay renders
-        // nothing — title text is already baked into the cover image.
-        currentPageData={pages[currentPage] ?? null}
-        nextPageData={pages[currentPage + 1] ?? null}
-        writingStyle={story.writingStyle ?? null}
-        fontMgr={fontMgr}
-        textColor={palette.colors.textDark}
-        accentColor={palette.colors.accent}
-        haloColor={palette.colors.haloColor /* FC-018: warm tint, NOT pure white; alpha applied internally */}
       />
 
       {controlsVisible && (
