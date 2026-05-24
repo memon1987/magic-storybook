@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   scoreText,
+  isRetryableError,
   bakedTextPasses,
   bakedTextF1,
   simulateVerifyLoop,
@@ -65,6 +66,35 @@ describe('scoreText', () => {
     // intended tokens: hello, world (len>1). detected: hello, world (a dropped).
     expect(s.recall).toBe(1);
     expect(s.precision).toBe(1);
+  });
+});
+
+describe('isRetryableError', () => {
+  it('retries real transient Gemini 5xx errors', () => {
+    expect(isRetryableError(new Error('ServerError: got status: 500 Internal Server Error. {"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}'))).toBe(true);
+    expect(isRetryableError(new Error('got status: 503 Service Unavailable. {"error":{"code":503,"status":"UNAVAILABLE"}}'))).toBe(true);
+    expect(isRetryableError(new Error('502 Bad Gateway'))).toBe(false); // no status/code context, no keyword → not retried (acceptable: rare from this client)
+    expect(isRetryableError(new Error('The model is overloaded due to high demand'))).toBe(true);
+  });
+
+  it('retries network resets', () => {
+    expect(isRetryableError(new Error('FetchError: request failed, reason: ECONNRESET'))).toBe(true);
+    expect(isRetryableError(new Error('fetch failed'))).toBe(true);
+    expect(isRetryableError(new Error('socket hang up'))).toBe(true);
+  });
+
+  it('does NOT retry non-retryable errors carrying stray numbers/words (review false-positives)', () => {
+    expect(isRetryableError(new Error('429: limit is 60 per 500 seconds'))).toBe(false); // quota — retrying makes it worse
+    expect(isRetryableError(new Error('500 tokens generated'))).toBe(false);
+    expect(isRetryableError(new Error('400 Bad Request: INTERNAL_ID malformed'))).toBe(false);
+    expect(isRetryableError(new Error('401 Unauthorized'))).toBe(false);
+    expect(isRetryableError(new Error('RESOURCE_EXHAUSTED'))).toBe(false);
+  });
+
+  it('handles non-object inputs', () => {
+    expect(isRetryableError(null)).toBe(false);
+    expect(isRetryableError(undefined)).toBe(false);
+    expect(isRetryableError('500')).toBe(false);
   });
 });
 

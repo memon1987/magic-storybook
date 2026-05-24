@@ -55,6 +55,35 @@ export const CANONICAL_ANCHOR_PAGES = 2;
 // memory / open connections (multimodal payloads are ~4-5MB each). Tunable.
 export const PAGE_GEN_CONCURRENCY = 4;
 
+// FC-020: cap on character REFERENCE IMAGES attached per page. Gemini's
+// multimodal request has a documented ~14-image cap. Each page sends
+// (char refs) + 1 cast lineup + (≤ CANONICAL_ANCHOR_PAGES anchors), so capping
+// char refs at 10 keeps the worst case at 10 + 1 + 2 = 13 ≤ 14. A story with
+// more named characters still gets all of them in the TEXTUAL character sheets
+// (prompt), just not all as reference images. Protagonist is ordered first, so
+// the cap keeps the most important characters' refs.
+export const MAX_CHARACTER_REFS = 10;
+
+/**
+ * Whether a thrown error from the Gemini/image stack is a transient server-side
+ * or network failure worth retrying. FC-020 broadened this beyond 503 (a 500
+ * INTERNAL dropped a page in testing) but ANCHORS the 5xx match to a status/code
+ * context so stray numbers (e.g. a 429's "limit ... per 500 seconds") don't
+ * trigger a retry storm on a non-retryable error.
+ */
+export function isRetryableError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const s = String(error);
+  return (
+    /(?:status|code)[\s"':,=]*(?:500|502|503|504)\b/i.test(s) ||
+    /\bUNAVAILABLE\b/.test(s) ||
+    /\bINTERNAL\b/.test(s) ||           // Gemini's status string for a 500 (not INTERNAL_ID etc.)
+    /high demand/i.test(s) ||
+    /\b(?:ECONNRESET|ETIMEDOUT|EAI_AGAIN)\b/.test(s) ||
+    /fetch failed|socket hang up/i.test(s)
+  );
+}
+
 export function bakedTextPasses(s: BakedTextScore): boolean {
   return s.recall >= TEXT_RECALL_MIN && s.precision >= TEXT_PRECISION_MIN;
 }

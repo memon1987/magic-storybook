@@ -11,7 +11,12 @@ if (!API_URL || /XXXX/.test(API_URL)) {
 // Create axios instance
 const api: AxiosInstance = axios.create({
   baseURL: API_URL,
-  timeout: 600000, // 10 minutes — story + 4-12 illustrations + 503 retries (Cloud Run timeout is 600s)
+  // 10 min. This CLIENT timeout is the binding ceiling for synchronous story
+  // generation — the backend (Cloud Run) allows up to 3600s, so if this fires
+  // the server keeps running, finishes, and saves the story to Firestore even
+  // though the client surfaced an error (the story appears in the library on
+  // next load). FC-017 (async job model) is the durable fix.
+  timeout: 600000,
   headers: {
     'Content-Type': 'application/json',
   },

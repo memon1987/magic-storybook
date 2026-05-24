@@ -14,6 +14,7 @@ import {
   BakedTextScore,
   wordTokens,
   scoreText,
+  isRetryableError,
   bakedTextPasses,
   bakedTextF1,
   splitForAnchoring,
@@ -24,6 +25,7 @@ import {
   TEXT_PRECISION_MIN,
   CANONICAL_ANCHOR_PAGES,
   PAGE_GEN_CONCURRENCY,
+  MAX_CHARACTER_REFS,
 } from './textVerify';
 import { buildStoryPrompt } from '../prompts/story';
 import { buildIllustrationPrompt } from '../prompts/illustration';
@@ -101,31 +103,6 @@ function sleep(ms: number): Promise<void> {
 function jitteredBackoffMs(attempt: number): number {
   const base = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
   return Math.round(base * (0.5 + Math.random()));
-}
-
-/**
- * Check if an error is retryable. FC-020: broadened beyond 503. A transient
- * 500 INTERNAL from Gemini was previously NOT retried and dropped a page to a
- * placeholder. We now retry all transient server-side 5xx (500/502/503/504),
- * Gemini's status strings, and common network resets, under the existing
- * jittered exponential backoff. 501 (Not Implemented) is intentionally excluded
- * — retrying it can't succeed.
- */
-function isRetryableError(error: unknown): boolean {
-  if (error && typeof error === 'object') {
-    const errorStr = String(error);
-    return (
-      /\b(500|502|503|504)\b/.test(errorStr) ||
-      errorStr.includes('UNAVAILABLE') ||
-      errorStr.includes('INTERNAL') ||
-      errorStr.includes('high demand') ||
-      errorStr.includes('ECONNRESET') ||
-      errorStr.includes('ETIMEDOUT') ||
-      errorStr.includes('fetch failed') ||
-      errorStr.includes('socket hang up')
-    );
-  }
-  return false;
 }
 
 /**
@@ -709,17 +686,17 @@ export interface AllIllustrationsResult {
 }
 
 /**
- * Generate all illustrations for a story.
+ * Generate all illustrations for a story (FC-020 pipeline).
  *
- * FC-013 pipeline (when story has named characters):
- *   1. Generate one model-sheet reference image per character in parallel
- *   2. Generate page 1 with all character references attached
- *   3. Generate pages 2..N in parallel; each call gets all character refs +
- *      page 1's image as a setting reference
+ *   1. Character model-sheet refs — parallel (capped at MAX_CHARACTER_REFS images).
+ *   2. Cast lineup (>1 character) + title page — parallel.
+ *   3. First CANONICAL_ANCHOR_PAGES pages — SEQUENTIAL, each baked + OCR-verified,
+ *      becoming fixed canonical anchors.
+ *   4. Remaining pages — PARALLEL (bounded concurrency), each referencing char
+ *      refs + cast + the fixed anchors. Text is baked into every page.
  *
- * Backwards-compatible legacy path (when story.characterSheets is empty):
- *   1. Generate page 1 alone
- *   2. Generate pages 2..N in parallel with page 1 as a single ref
+ * Stories with no named characters skip steps 1-2; pages still anchor on the
+ * first rendered pages.
  */
 export async function generateAllIllustrations(
   story: GeneratedStory,
@@ -751,12 +728,25 @@ export async function generateAllIllustrations(
       })
     : story.characterSheets;
 
-  if (orderedSheets.length > 0) {
+  // FC-020 (review HIGH): cap character REFERENCE IMAGES so a many-character
+  // story can't blow past Gemini's ~14-image multimodal cap and fail every
+  // page into placeholders. Excess characters still appear in the TEXTUAL
+  // character sheets passed to the prompt; only their ref images are dropped
+  // (protagonist is ordered first, so the most important refs are kept).
+  const sheetsForRefs = orderedSheets.slice(0, MAX_CHARACTER_REFS);
+  if (orderedSheets.length > sheetsForRefs.length) {
+    console.warn(
+      `Story has ${orderedSheets.length} characters; capping reference images at ${MAX_CHARACTER_REFS} ` +
+      `(${orderedSheets.slice(MAX_CHARACTER_REFS).map((c) => c.name).join(', ')} get textual sheets only).`,
+    );
+  }
+
+  if (sheetsForRefs.length > 0) {
     console.log(
-      `Step 2a (FC-013): generating ${orderedSheets.length} character reference image(s) in parallel: ${orderedSheets.map((c) => c.name).join(', ')}...`,
+      `Step 2a (FC-013): generating ${sheetsForRefs.length} character reference image(s) in parallel: ${sheetsForRefs.map((c) => c.name).join(', ')}...`,
     );
     const refResults = await Promise.all(
-      orderedSheets.map((c) => generateCharacterReference(c, storyId, style)),
+      sheetsForRefs.map((c) => generateCharacterReference(c, storyId, style)),
     );
     for (const result of refResults) {
       // FC-013 review fix H2: only persist + return refs that actually produced
