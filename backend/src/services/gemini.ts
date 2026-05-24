@@ -8,8 +8,6 @@ import {
   CharacterVisualSheet,
   SettingVisualIdentity,
   TitlePage,
-  TextPosition,
-  TEXT_POSITIONS,
 } from '../types';
 import { ImageAnnotatorClient } from '@google-cloud/vision';
 import { buildStoryPrompt } from '../prompts/story';
@@ -59,18 +57,29 @@ export interface BakedTextScore {
  * rendered, so excluding them would tank precision on clean pages). On OCR error
  * returns perfect scores (fail open — never block a page on an OCR outage).
  */
-async function scoreBakedText(imageBase64: string, intendedText: string): Promise<BakedTextScore> {
+/**
+ * Pure recall/precision math (FC-020: extracted from scoreBakedText so it's
+ * unit-testable with string fixtures, including the real page-6 jumble). Empty
+ * intended → perfect (nothing to render). Empty detected with non-empty intended
+ * → zero (text expected, none found).
+ */
+export function scoreText(intendedText: string, detectedText: string): BakedTextScore {
   const intended = wordTokens(intendedText);
   if (intended.length === 0) return { recall: 1, precision: 1 };
   const intendedSet = new Set(intended);
+  const detectedSet = new Set(wordTokens(detectedText));
+  if (detectedSet.size === 0) return { recall: 0, precision: 0 };
+  const recall = [...intendedSet].filter((w) => detectedSet.has(w)).length / intendedSet.size;
+  const precision = [...detectedSet].filter((w) => intendedSet.has(w)).length / detectedSet.size;
+  return { recall, precision };
+}
+
+async function scoreBakedText(imageBase64: string, intendedText: string): Promise<BakedTextScore> {
+  if (wordTokens(intendedText).length === 0) return { recall: 1, precision: 1 };
   try {
     const [result] = await visionClient().textDetection({ image: { content: imageBase64 } });
     const detected = result.fullTextAnnotation?.text ?? result.textAnnotations?.[0]?.description ?? '';
-    const detectedSet = new Set(wordTokens(detected));
-    if (detectedSet.size === 0) return { recall: 0, precision: 0 };
-    const recall = [...intendedSet].filter((w) => detectedSet.has(w)).length / intendedSet.size;
-    const precision = [...detectedSet].filter((w) => intendedSet.has(w)).length / detectedSet.size;
-    return { recall, precision };
+    return scoreText(intendedText, detected);
   } catch (e) {
     console.warn('[TEXT-VERIFY] OCR failed, failing open (treating as pass):', e);
     return { recall: 1, precision: 1 };
@@ -82,13 +91,79 @@ async function scoreBakedText(imageBase64: string, intendedText: string): Promis
 // when EITHER axis fails. F1 ranks candidates when none fully pass.
 const TEXT_RECALL_MIN = 0.6;
 const TEXT_PRECISION_MIN = 0.75;
-const MAX_TEXT_GEN_ATTEMPTS = 3;    // total generations per page when verifyText is on
+// Production attempt cap (FC-020): 2 total generations per page bounds the
+// synchronous timeout budget while still re-rolling the ~10% stochastic jumbles.
+const PROD_TEXT_GEN_ATTEMPTS = 2;
+const MAX_TEXT_GEN_ATTEMPTS = 3;    // default cap when verifyText is on
 
-function bakedTextPasses(s: BakedTextScore): boolean {
+// FC-020: how many of the first rendered pages are pinned as fixed "canonical"
+// in-scene anchors that every later page references. Pinning the first K (not an
+// accumulating chain) means a later page's drift can't propagate, and lets pages
+// K+1..N generate in parallel (no inter-page dependency). Validated at K=2.
+const CANONICAL_ANCHOR_PAGES = 2;
+// Cap on simultaneous page generations in the parallel phase, to bound peak
+// memory / open connections (multimodal payloads are ~4-5MB each). Tunable.
+const PAGE_GEN_CONCURRENCY = 4;
+
+export function bakedTextPasses(s: BakedTextScore): boolean {
   return s.recall >= TEXT_RECALL_MIN && s.precision >= TEXT_PRECISION_MIN;
 }
-function bakedTextF1(s: BakedTextScore): number {
+export function bakedTextF1(s: BakedTextScore): number {
   return s.precision + s.recall ? (2 * s.precision * s.recall) / (s.precision + s.recall) : 0;
+}
+
+/**
+ * FC-020: the verify-and-regenerate contract, as a pure function over a fixed
+ * sequence of candidate scores. The real loop in generateIllustration mirrors
+ * this exactly (it carries image bytes alongside, so it can't call this
+ * directly) — keep the two in sync. Stops at the first passing candidate;
+ * otherwise runs the whole sequence and keeps the highest-F1 one.
+ */
+export function simulateVerifyLoop(scores: BakedTextScore[]): { keptIndex: number; attempts: number } {
+  let keptIndex = -1;
+  let bestF1 = -1;
+  for (let i = 0; i < scores.length; i++) {
+    const f1 = bakedTextF1(scores[i]);
+    if (f1 > bestF1) {
+      bestF1 = f1;
+      keptIndex = i;
+    }
+    if (bakedTextPasses(scores[i])) return { keptIndex: i, attempts: i + 1 };
+  }
+  return { keptIndex, attempts: scores.length };
+}
+
+/**
+ * FC-020: run an async mapper over items with a bounded concurrency, preserving
+ * input order in the result. Used for the parallel page-generation phase so a
+ * 12-page story doesn't fire all image calls at once.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) break;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/**
+ * FC-020: split pages into the first K (generated sequentially to establish
+ * canonical anchors) and the rest (generated in parallel against those anchors).
+ * Clamps K to [0, length]. Pure — unit-tested.
+ */
+export function splitForAnchoring<T>(pages: T[], k: number): { sequential: T[]; parallel: T[] } {
+  const n = Math.max(0, Math.min(k, pages.length));
+  return { sequential: pages.slice(0, n), parallel: pages.slice(n) };
 }
 
 // Model constants
@@ -99,12 +174,8 @@ function bakedTextF1(s: BakedTextScore): number {
 //   User override of FC-002; full benchmark plan deferred.
 const TEXT_MODEL = 'gemini-3-flash-preview';
 const IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
-// FC-019: Pro Image model used by `generateIllustrationPro` for the spike.
-// ~94-96% text accuracy with multi-line support; ~2× cost; Google's forward
-// image lane (Imagen 4 is being deprecated June 2026 per Google docs).
-const IMAGE_MODEL_PRO = 'gemini-3-pro-image-preview';
 
-// Retry configuration for handling 503 Service Unavailable errors
+// Retry configuration for handling transient 5xx errors
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY_MS = 2000; // 2 seconds
 
@@ -132,12 +203,26 @@ function jitteredBackoffMs(attempt: number): number {
 }
 
 /**
- * Check if an error is retryable (503 Service Unavailable)
+ * Check if an error is retryable. FC-020: broadened beyond 503. A transient
+ * 500 INTERNAL from Gemini was previously NOT retried and dropped a page to a
+ * placeholder. We now retry all transient server-side 5xx (500/502/503/504),
+ * Gemini's status strings, and common network resets, under the existing
+ * jittered exponential backoff. 501 (Not Implemented) is intentionally excluded
+ * — retrying it can't succeed.
  */
 function isRetryableError(error: unknown): boolean {
   if (error && typeof error === 'object') {
     const errorStr = String(error);
-    return errorStr.includes('503') || errorStr.includes('UNAVAILABLE') || errorStr.includes('high demand');
+    return (
+      /\b(500|502|503|504)\b/.test(errorStr) ||
+      errorStr.includes('UNAVAILABLE') ||
+      errorStr.includes('INTERNAL') ||
+      errorStr.includes('high demand') ||
+      errorStr.includes('ECONNRESET') ||
+      errorStr.includes('ETIMEDOUT') ||
+      errorStr.includes('fetch failed') ||
+      errorStr.includes('socket hang up')
+    );
   }
   return false;
 }
@@ -207,23 +292,11 @@ export async function generateStory(input: StoryInput): Promise<GeneratedStory> 
         throw new Error(`Invalid page ${index + 1}: missing text or sceneDescription`);
       }
 
-      // FC-015: validate optional overlay fields with graceful fallback so a
-      // single bad value doesn't abort the whole story.
+      // FC-020: narration is baked into the image; soundEffects + emphasizedWords
+      // are baked illustration guidance. (textPosition was removed with the Skia
+      // overlay.) Validate these optional fields with graceful fallback so one
+      // bad value doesn't abort the whole story.
       //
-      // Review fix HIGH-1: default missing OR invalid textPosition to 'bottom'
-      // (NOT undefined). Without this, if Gemini omits the "MUST" field on a
-      // page (which happens occasionally under load), the FC-015 path produces
-      // an image with NO baked text AND the mobile overlay renders nothing —
-      // strictly worse than the pre-FC-015 baseline. A guaranteed default
-      // means every page always has visible narration.
-      if (page.textPosition === undefined || !TEXT_POSITIONS.includes(page.textPosition)) {
-        if (page.textPosition !== undefined) {
-          console.warn(`Page ${page.pageNumber}: invalid textPosition "${page.textPosition}", defaulting to "bottom"`);
-        } else {
-          console.warn(`Page ${page.pageNumber}: missing textPosition, defaulting to "bottom"`);
-        }
-        page.textPosition = 'bottom';
-      }
       // Review fix MEDIUM-6: soundEffects are baked INTO the image as
       // stylized words. Long entries trigger Gemini's known accuracy fall-off
       // on long in-image text; >2 of them clutters the reserved-space
@@ -376,122 +449,17 @@ function buildPageContents(
   return contents;
 }
 
-export async function generateIllustration(
-  sceneDescription: string,
-  animalType: string,
-  storyId: string,
-  pageNumber: number,
-  style: ArtStyle = 'watercolor',
-  pageText?: string,
-  characterSheets?: CharacterVisualSheet[],
-  settingIdentity?: SettingVisualIdentity,
-  references: ReferenceImage[] = [],
-  textPosition?: TextPosition,
-  soundEffects?: string[],
-): Promise<IllustrationResult> {
-  const characterRefNames = references
-    .filter((r) => r.type === 'character')
-    .map((r) => ({ name: r.name ?? 'unnamed' }));
-
-  const promptText = buildIllustrationPrompt(
-    sceneDescription,
-    animalType,
-    style,
-    pageText,
-    characterSheets,
-    settingIdentity,
-    characterRefNames,
-    textPosition,
-    soundEffects,
-  );
-
-  const contents = buildPageContents(references, promptText);
-
-  // FC-013 review fix H3: log multimodal payload size so post-deploy we can
-  // diagnose payload-too-large failures (Gemini documents a 20MB inline cap).
-  const payloadBytes = JSON.stringify(contents).length;
-  const refSummary =
-    references.length === 0
-      ? ''
-      : ` (with ${references.filter((r) => r.type === 'character').length} character ref(s)${references.some((r) => r.type === 'setting') ? ' + setting ref' : ''})`;
-  console.log(
-    `Generating illustration for page ${pageNumber} with ${IMAGE_MODEL}${refSummary} [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
-  );
-  const startTime = Date.now();
-
-  let lastError: unknown = null;
-
-  // Retry loop for handling temporary 503 errors
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const response = await ai.models.generateContent({
-        model: IMAGE_MODEL,
-        contents,
-        config: { responseModalities: ['IMAGE'] },
-      });
-
-      const elapsed = Date.now() - startTime;
-      console.log(`Illustration for page ${pageNumber} generated in ${elapsed}ms (attempt ${attempt})`);
-
-      const candidates = response.candidates || [];
-      if (candidates.length === 0) {
-        throw new Error('No candidates in generation response');
-      }
-
-      const parts = candidates[0]?.content?.parts || [];
-      let imageData: string | null = null;
-      let mimeType = 'image/png';
-
-      for (const part of parts) {
-        if (part.inlineData?.data) {
-          imageData = part.inlineData.data;
-          mimeType = part.inlineData.mimeType || 'image/png';
-          break;
-        }
-      }
-
-      if (!imageData) {
-        throw new Error('No image data in generation response');
-      }
-
-      const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
-      const filename = `stories/${storyId}/page-${pageNumber}-${uuid()}.${extension}`;
-      const publicUrl = await uploadGeneratedImage(imageData, mimeType, filename);
-      return { publicUrl, imageBase64: imageData, mimeType };
-    } catch (error) {
-      lastError = error;
-
-      if (isRetryableError(error) && attempt < MAX_RETRIES) {
-        const delayMs = jitteredBackoffMs(attempt);
-        console.log(`Page ${pageNumber}: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
-        await sleep(delayMs);
-        continue;
-      }
-
-      console.error(`Failed to generate illustration for page ${pageNumber} after ${attempt} attempts:`, error);
-      break;
-    }
-  }
-
-  console.error(`All ${MAX_RETRIES} attempts failed for page ${pageNumber}; last error:`, lastError);
-  return { publicUrl: `https://placehold.co/800x600/png?text=Page+${pageNumber}`, imageBase64: null, mimeType: 'image/png' };
-}
-
 /**
- * FC-019 spike: bake narration text INTO the image (legacy pre-FC-015 path),
- * parameterized by model so the consistency bakeoff can compare Gemini 3 Pro
- * Image vs Gemini 3.1 Flash Image head-to-head with identical inputs.
+ * FC-020: production page illustrator. Bakes the narration text INTO the image
+ * (Gemini Flash), then OCR-verifies it and regenerates (up to `maxAttempts`)
+ * when the rendered text fails recall/precision (jumbled or hallucinated text —
+ * see scoreBakedText). Character / cast / prior-page references pass through to
+ * buildPageContents for cross-page consistency.
  *
- * Forces the `pageText` branch of `buildIllustrationPrompt` (text baked in)
- * and OMITS `textPosition` / `soundEffects` (Skia-overlay-only). Character
- * references — including FC-019 `prior_page` in-scene anchors — pass through
- * to `buildPageContents` for maximum cross-page consistency.
- *
- * `imageModel` picks the model; `spikeSubdir` keeps Pro vs Flash outputs in
- * separate Cloud Storage prefixes (`spike-pro/` vs `spike-flash/`). Returns
- * imageBase64 so the caller can accumulate it as a `prior_page` ref.
+ * Returns imageBase64 so the caller can pin the rendered page as a canonical
+ * anchor for subsequent pages.
  */
-export async function generateIllustrationBaked(
+export async function generateIllustration(
   sceneDescription: string,
   animalType: string,
   storyId: string,
@@ -500,22 +468,18 @@ export async function generateIllustrationBaked(
   style: ArtStyle,
   characterSheets: CharacterVisualSheet[] | undefined,
   settingIdentity: SettingVisualIdentity | undefined,
-  references: ReferenceImage[],
-  imageModel: string,
-  spikeSubdir: string,
+  references: ReferenceImage[] = [],
   soundEffects?: string[],
   emphasizedWords?: string[],
-  verifyText?: boolean,
+  opts: { verifyText?: boolean; maxAttempts?: number } = {},
 ): Promise<IllustrationResult> {
+  const verifyText = opts.verifyText ?? true;
+  const maxAttempts = opts.maxAttempts ?? PROD_TEXT_GEN_ATTEMPTS;
+
   const characterRefNames = references
     .filter((r) => r.type === 'character')
     .map((r) => ({ name: r.name ?? 'unnamed' }));
 
-  // FC-019 playful-text: legacy baked path (pageText set, textPosition
-  // undefined) now renders soundEffects as bold playful onomatopoeia +
-  // emphasizedWords as accented narration. These were previously omitted
-  // from the bakeoff so it produced flat captions with no picture-book
-  // playfulness (Pout-Pout "glub glub", Dr. Seuss sound words).
   const promptText = buildIllustrationPrompt(
     sceneDescription,
     animalType,
@@ -524,38 +488,31 @@ export async function generateIllustrationBaked(
     characterSheets,
     settingIdentity,
     characterRefNames,
-    /* textPosition */ undefined,
     soundEffects,
     emphasizedWords,
   );
 
   const contents = buildPageContents(references, promptText);
   const payloadBytes = JSON.stringify(contents).length;
-  const tag = `[SPIKE-${spikeSubdir.toUpperCase()}]`;
-  const refSummary = ` (refs: ${references.filter((r) => r.type === 'character').length} char + ${references.filter((r) => r.type === 'prior_page').length} prior-page + ${references.filter((r) => r.type === 'setting').length} setting)`;
-  console.log(
-    `${tag} Generating page ${pageNumber} with ${imageModel}${refSummary} [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
-  );
+  const tag = `[page ${pageNumber}]`;
+  const refSummary = ` (refs: ${references.filter((r) => r.type === 'character').length} char + ${references.filter((r) => r.type === 'cast').length} cast + ${references.filter((r) => r.type === 'prior_page').length} anchor)`;
+  console.log(`${tag} Generating with ${IMAGE_MODEL}${refSummary} [payload ~${Math.round(payloadBytes / 1024)}KB]...`);
   const startTime = Date.now();
 
-  // Inner generation with the existing 503 exponential-backoff retry. Returns
-  // the raw image bytes (not uploaded yet) so the outer verify loop can OCR a
-  // candidate before deciding whether to keep or regenerate it. Returns null
-  // only when all 503 retries are exhausted (infra failure — regenerating for
-  // text quality won't help, so the outer loop stops on null).
+  // One generation attempt, with the existing 503/5xx jittered-backoff retry.
+  // Returns raw bytes (not uploaded) so the verify loop can OCR before keeping.
+  // Returns null only when all transient retries are exhausted (regenerating
+  // for text quality won't help there, so the outer loop stops on null).
   const generateOnce = async (): Promise<{ imageData: string; mimeType: string } | null> => {
     let lastError: unknown = null;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
         const response = await ai.models.generateContent({
-          model: imageModel,
+          model: IMAGE_MODEL,
           contents,
           config: { responseModalities: ['IMAGE'] },
         });
-
-        const elapsed = Date.now() - startTime;
-        console.log(`${tag} Page ${pageNumber} generated in ${elapsed}ms (attempt ${attempt})`);
-
+        console.log(`${tag} generated in ${Date.now() - startTime}ms (attempt ${attempt})`);
         const parts = response.candidates?.[0]?.content?.parts || [];
         let imageData: string | null = null;
         let mimeType = 'image/png';
@@ -566,82 +523,59 @@ export async function generateIllustrationBaked(
             break;
           }
         }
-        if (!imageData) {
-          throw new Error(`No image data in ${imageModel} response`);
-        }
+        if (!imageData) throw new Error(`No image data in ${IMAGE_MODEL} response`);
         return { imageData, mimeType };
       } catch (error) {
         lastError = error;
         if (isRetryableError(error) && attempt < MAX_RETRIES) {
           const delayMs = jitteredBackoffMs(attempt);
-          console.log(`${tag} Page ${pageNumber}: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
+          console.log(`${tag} retryable error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
           await sleep(delayMs);
           continue;
         }
-        console.error(`${tag} Failed to generate page ${pageNumber} after ${attempt} attempts:`, error);
+        console.error(`${tag} failed after ${attempt} attempts:`, error);
         break;
       }
     }
-    console.error(`${tag} All ${MAX_RETRIES} attempts failed for page ${pageNumber}; last error:`, lastError);
+    console.error(`${tag} all ${MAX_RETRIES} attempts failed; last error:`, lastError);
     return null;
   };
 
-  // FC-019 text-verify: when verifyText is on, wrap generation in an outer
-  // regenerate loop. Each pass produces a candidate scored on recall +
-  // precision (see scoreBakedText). A page regenerates when EITHER axis fails
-  // — recall<min (missing/garbled words) OR precision<min (hallucinated/
-  // duplicated gibberish, the page-6 failure we observed). Up to
-  // MAX_TEXT_GEN_ATTEMPTS; we keep the highest-F1 candidate so a later worse
-  // roll never wins. Sound-effect words are folded into the intended set so
-  // they don't read as "extra" and depress precision on clean pages.
+  // OCR verify-and-regenerate. Sound-effect words are folded into the intended
+  // set so they don't read as "extra" and depress precision. Keep the best-F1
+  // candidate so a later worse roll never wins.
   const intendedForOcr = [pageText, ...(soundEffects ?? [])].join(' ');
-  const maxGenAttempts = verifyText ? MAX_TEXT_GEN_ATTEMPTS : 1;
+  const maxGenAttempts = verifyText ? maxAttempts : 1;
   let best: { imageData: string; mimeType: string; score: BakedTextScore; f1: number } | null = null;
-  let genAttemptsUsed = 0;
 
   for (let genAttempt = 1; genAttempt <= maxGenAttempts; genAttempt++) {
     const produced = await generateOnce();
-    if (!produced) break; // infra failure — stop, regeneration won't help
-    genAttemptsUsed = genAttempt;
-
+    if (!produced) break; // transient failure exhausted — stop
     if (!verifyText) {
       best = { ...produced, score: { recall: NaN, precision: NaN }, f1: NaN };
       break;
     }
-
     const score = await scoreBakedText(produced.imageData, intendedForOcr);
     const f1 = bakedTextF1(score);
     console.log(
-      `${tag} Page ${pageNumber} text-verify recall=${score.recall.toFixed(2)} precision=${score.precision.toFixed(2)} ` +
+      `${tag} text-verify recall=${score.recall.toFixed(2)} precision=${score.precision.toFixed(2)} ` +
       `(gen ${genAttempt}/${maxGenAttempts}, min recall ${TEXT_RECALL_MIN}/precision ${TEXT_PRECISION_MIN})`,
     );
     if (!best || f1 > best.f1) best = { ...produced, score, f1 };
     if (bakedTextPasses(score)) break;
-    if (genAttempt < maxGenAttempts) {
-      console.log(`${tag} Page ${pageNumber} text below threshold — regenerating...`);
-    }
+    if (genAttempt < maxGenAttempts) console.log(`${tag} text below threshold — regenerating...`);
   }
 
   if (best) {
     const extension = best.mimeType.includes('jpeg') || best.mimeType.includes('jpg') ? 'jpg' : 'png';
-    const filename = `stories/${storyId}/${spikeSubdir}/page-${pageNumber}-${uuid()}.${extension}`;
+    const filename = `stories/${storyId}/page-${pageNumber}-${uuid()}.${extension}`;
     const publicUrl = await uploadGeneratedImage(best.imageData, best.mimeType, filename);
-    return {
-      publicUrl,
-      imageBase64: best.imageData,
-      mimeType: best.mimeType,
-      ...(verifyText
-        ? { textRecall: best.score.recall, textPrecision: best.score.precision, textGenAttempts: genAttemptsUsed }
-        : {}),
-    };
+    return { publicUrl, imageBase64: best.imageData, mimeType: best.mimeType };
   }
 
-  return { publicUrl: `https://placehold.co/800x600/png?text=SPIKE+Failed+Page+${pageNumber}`, imageBase64: null, mimeType: 'image/png' };
+  console.error(`${tag} generation failed — returning placeholder`);
+  return { publicUrl: `https://placehold.co/800x600/png?text=Page+${pageNumber}`, imageBase64: null, mimeType: 'image/png' };
 }
-
-// FC-019: exported model constants so the spike route can label variants.
-export const SPIKE_IMAGE_MODEL_PRO = IMAGE_MODEL_PRO;
-export const SPIKE_IMAGE_MODEL_FLASH = IMAGE_MODEL;
 
 /**
  * FC-013: Generate a single character "model sheet" reference image used to
@@ -870,6 +804,7 @@ export interface AllIllustrationsResult {
   pageUrls: string[];
   characterReferenceUrls: Record<string, string>; // empty when characterSheets is empty
   titlePageImageUrl: string | null;               // FC-012: null when titlePage absent or generation failed
+  castReferenceUrl: string | null;                // FC-020: cast lineup ref (null when <2 characters or gen failed)
 }
 
 /**
@@ -894,7 +829,6 @@ export async function generateAllIllustrations(
 ): Promise<AllIllustrationsResult> {
   const startTime = Date.now();
   const sortedPages = [...story.pages].sort((a, b) => a.pageNumber - b.pageNumber);
-  const [firstPage, ...remainingPages] = sortedPages;
 
   // ----- Step 1 (FC-013): generate character references in parallel -----
   const characterReferenceUrls: Record<string, string> = {};
@@ -948,83 +882,74 @@ export async function generateAllIllustrations(
     console.log('Step 2a (FC-013): story has no named characters — skipping character reference stage');
   }
 
-  // ----- Step 1.5 (FC-012): generate title page (cover) ---------------------
-  // Sequential between character refs and page 1: needs character refs as
-  // multimodal inputs but doesn't need page 1 (the cover is its own scene).
-  // Failure is non-fatal — null titlePageImageUrl means the library falls
-  // back to pages[0] for the thumbnail, same as pre-FC-012 behavior.
-  let titlePageImageUrl: string | null = null;
-  if (story.titlePage) {
-    console.log(`Step 2a.5 (FC-012): generating title page with ${characterRefImages.length} character ref(s)...`);
-    titlePageImageUrl = await generateTitlePage(story.titlePage, storyId, style, characterRefImages);
-  } else {
-    console.log('Step 2a.5 (FC-012): story has no titlePage — skipping cover generation');
+  // ----- Step 2 (FC-012 + FC-020): cast lineup + title page, in parallel -----
+  // Both depend only on the character refs (not on any page), so run together.
+  // The cast lineup (only when >1 character) pins relative scale and becomes a
+  // fixed canonical reference on every page. Both failures are non-fatal: a null
+  // title falls back to pages[0]; a failed cast just means pages run without it.
+  const needsCast = orderedSheets.length > 1;
+  console.log(
+    `Step 2b: generating ${needsCast ? 'cast lineup + ' : ''}title page in parallel with ${characterRefImages.length} character ref(s)...`,
+  );
+  const [castResult, titlePageImageUrl] = await Promise.all([
+    needsCast ? generateCastReference(orderedSheets, storyId, style) : Promise.resolve(null),
+    story.titlePage ? generateTitlePage(story.titlePage, storyId, style, characterRefImages) : Promise.resolve(null),
+  ]);
+
+  let castReferenceUrl: string | null = null;
+  const baseRefs: ReferenceImage[] = [...characterRefImages];
+  if (castResult && castResult.imageBase64) {
+    castReferenceUrl = castResult.publicUrl;
+    baseRefs.push({ type: 'cast', data: castResult.imageBase64, mimeType: castResult.mimeType });
+  } else if (needsCast) {
+    console.warn('Cast lineup reference failed to produce image data — pages run without it.');
   }
 
-  // ----- Step 2: generate page 1 (with character refs if available) -----
-  // FC-015: do NOT pass pageText anymore — narration is composed as a Skia
-  // overlay on the mobile reader. Pass textPosition + soundEffects so the
-  // illustrator reserves negative space at the right spot.
-  console.log(`Step 2b: generating page ${firstPage.pageNumber} (page 1)...`);
-  const firstResult = await generateIllustration(
-    firstPage.sceneDescription,
-    animalType,
-    storyId,
-    firstPage.pageNumber,
-    style,
-    undefined, // FC-015: no pageText baked in
-    story.characterSheets,
-    story.settingIdentity,
-    characterRefImages, // page 1 gets character refs but no setting ref (it IS the setting establishing shot)
-    firstPage.textPosition,
-    firstPage.soundEffects,
-  );
+  // ----- Step 3 (FC-020): pages with pin-first-K canonical anchoring ---------
+  // The first K pages generate SEQUENTIALLY so each anchors on the prior
+  // rendered page(s); those K become FIXED canonical anchors. The rest then
+  // generate in PARALLEL (bounded concurrency), each referencing the same fixed
+  // anchors — no inter-page dependency, so a late page's drift can't propagate
+  // and the batch parallelizes safely. Text is baked + OCR-verified inside
+  // generateIllustration.
+  const { sequential: seqPages, parallel: parPages } = splitForAnchoring(sortedPages, CANONICAL_ANCHOR_PAGES);
+  const results = new Map<number, string>();
+  const canonicalAnchors: ReferenceImage[] = [];
 
-  const results: Map<number, string> = new Map();
-  results.set(firstPage.pageNumber, firstResult.publicUrl);
-
-  // ----- Step 3: generate pages 2..N in parallel with character refs + page 1 setting ref -----
-  if (remainingPages.length > 0) {
-    const settingRef: ReferenceImage | null = firstResult.imageBase64
-      ? { type: 'setting', data: firstResult.imageBase64, mimeType: firstResult.mimeType }
-      : null;
-
-    const pageReferences: ReferenceImage[] = settingRef
-      ? [...characterRefImages, settingRef]
-      : [...characterRefImages];
-
-    console.log(
-      `Step 2c: generating pages ${remainingPages.map((p) => p.pageNumber).join(', ')} in parallel with ${pageReferences.length} multimodal reference(s)...`,
+  console.log(`Step 3a: generating ${seqPages.length} canonical-anchor page(s) sequentially...`);
+  for (const page of seqPages) {
+    const refs = [...baseRefs, ...canonicalAnchors];
+    const r = await generateIllustration(
+      page.sceneDescription, animalType, storyId, page.pageNumber, page.text, style,
+      story.characterSheets, story.settingIdentity, refs, page.soundEffects, page.emphasizedWords,
     );
+    results.set(page.pageNumber, r.publicUrl);
+    if (r.imageBase64 && canonicalAnchors.length < CANONICAL_ANCHOR_PAGES) {
+      canonicalAnchors.push({ type: 'prior_page', pageNumber: page.pageNumber, data: r.imageBase64, mimeType: r.mimeType });
+    }
+  }
 
-    const remainingPromises = remainingPages.map((page) =>
+  if (parPages.length > 0) {
+    const refs = [...baseRefs, ...canonicalAnchors];
+    console.log(
+      `Step 3b: generating pages ${parPages.map((p) => p.pageNumber).join(', ')} in parallel (concurrency ${PAGE_GEN_CONCURRENCY}) with ${refs.length} reference(s)...`,
+    );
+    const parResults = await mapWithConcurrency(parPages, PAGE_GEN_CONCURRENCY, (page) =>
       generateIllustration(
-        page.sceneDescription,
-        animalType,
-        storyId,
-        page.pageNumber,
-        style,
-        undefined, // FC-015: no pageText baked in
-        story.characterSheets,
-        story.settingIdentity,
-        pageReferences,
-        page.textPosition,
-        page.soundEffects,
+        page.sceneDescription, animalType, storyId, page.pageNumber, page.text, style,
+        story.characterSheets, story.settingIdentity, refs, page.soundEffects, page.emphasizedWords,
       ),
     );
-
-    const remainingResults = await Promise.all(remainingPromises);
-    remainingPages.forEach((page, index) => {
-      results.set(page.pageNumber, remainingResults[index].publicUrl);
-    });
+    parPages.forEach((page, i) => results.set(page.pageNumber, parResults[i].publicUrl));
   }
 
   const pageUrls = sortedPages.map((page) => results.get(page.pageNumber)!);
 
   const elapsed = Date.now() - startTime;
   console.log(
-    `All ${story.pages.length} illustrations + ${Object.keys(characterReferenceUrls).length} character ref(s) generated in ${elapsed}ms`,
+    `All ${story.pages.length} illustrations + ${Object.keys(characterReferenceUrls).length} char ref(s)` +
+    `${castReferenceUrl ? ' + cast ref' : ''} generated in ${elapsed}ms`,
   );
 
-  return { pageUrls, characterReferenceUrls, titlePageImageUrl };
+  return { pageUrls, characterReferenceUrls, titlePageImageUrl, castReferenceUrl };
 }
