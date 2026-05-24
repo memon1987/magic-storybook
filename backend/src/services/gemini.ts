@@ -10,6 +10,21 @@ import {
   TitlePage,
 } from '../types';
 import { ImageAnnotatorClient } from '@google-cloud/vision';
+import {
+  BakedTextScore,
+  wordTokens,
+  scoreText,
+  bakedTextPasses,
+  bakedTextF1,
+  splitForAnchoring,
+  mapWithConcurrency,
+  PROD_TEXT_GEN_ATTEMPTS,
+  MAX_TEXT_GEN_ATTEMPTS,
+  TEXT_RECALL_MIN,
+  TEXT_PRECISION_MIN,
+  CANONICAL_ANCHOR_PAGES,
+  PAGE_GEN_CONCURRENCY,
+} from './textVerify';
 import { buildStoryPrompt } from '../prompts/story';
 import { buildIllustrationPrompt } from '../prompts/illustration';
 import { buildCharacterReferencePrompt, buildCastReferencePrompt } from '../prompts/characterReference';
@@ -33,47 +48,13 @@ function visionClient(): ImageAnnotatorClient {
   return _vision;
 }
 
-/** Normalize text to a set of comparable lowercase alphanumeric word tokens. */
-function wordTokens(s: string): string[] {
-  return s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 1);
-}
-
-export interface BakedTextScore {
-  recall: number;    // fraction of intended words present in the OCR output
-  precision: number; // fraction of OCR'd words that were intended
-}
-
 /**
- * OCR the image and score the baked narration against the intended text on TWO
- * axes (FC-019 — validated against historical renders):
- *
- *  - recall    catches MISSING / garbled text: intended words that didn't render.
- *  - precision catches HALLUCINATED / duplicated text: the dominant Flash failure
- *    we observed was a second gibberish text block ("Toonallery it, too drenist")
- *    rendered alongside the correct one — recall stays 1.0 there, so recall alone
- *    misses it; precision drops (jumble≈0.64 vs clean≥0.94 across 12 renders).
- *
- * `intendedText` must already include any sound-effect words (they are legitimately
- * rendered, so excluding them would tank precision on clean pages). On OCR error
- * returns perfect scores (fail open — never block a page on an OCR outage).
+ * OCR the image via Cloud Vision and score the baked narration against the
+ * intended text (recall + precision; see textVerify.scoreText). `intendedText`
+ * must already include any sound-effect words (they are legitimately rendered).
+ * On OCR error returns perfect scores (fail open — never block a page on an OCR
+ * outage).
  */
-/**
- * Pure recall/precision math (FC-020: extracted from scoreBakedText so it's
- * unit-testable with string fixtures, including the real page-6 jumble). Empty
- * intended → perfect (nothing to render). Empty detected with non-empty intended
- * → zero (text expected, none found).
- */
-export function scoreText(intendedText: string, detectedText: string): BakedTextScore {
-  const intended = wordTokens(intendedText);
-  if (intended.length === 0) return { recall: 1, precision: 1 };
-  const intendedSet = new Set(intended);
-  const detectedSet = new Set(wordTokens(detectedText));
-  if (detectedSet.size === 0) return { recall: 0, precision: 0 };
-  const recall = [...intendedSet].filter((w) => detectedSet.has(w)).length / intendedSet.size;
-  const precision = [...detectedSet].filter((w) => intendedSet.has(w)).length / detectedSet.size;
-  return { recall, precision };
-}
-
 async function scoreBakedText(imageBase64: string, intendedText: string): Promise<BakedTextScore> {
   if (wordTokens(intendedText).length === 0) return { recall: 1, precision: 1 };
   try {
@@ -84,86 +65,6 @@ async function scoreBakedText(imageBase64: string, intendedText: string): Promis
     console.warn('[TEXT-VERIFY] OCR failed, failing open (treating as pass):', e);
     return { recall: 1, precision: 1 };
   }
-}
-
-// Detection thresholds (FC-019, validated on 12 historical renders: 11 clean
-// at precision 0.94-1.00, 1 jumble at precision 0.64). A page is regenerated
-// when EITHER axis fails. F1 ranks candidates when none fully pass.
-const TEXT_RECALL_MIN = 0.6;
-const TEXT_PRECISION_MIN = 0.75;
-// Production attempt cap (FC-020): 2 total generations per page bounds the
-// synchronous timeout budget while still re-rolling the ~10% stochastic jumbles.
-const PROD_TEXT_GEN_ATTEMPTS = 2;
-const MAX_TEXT_GEN_ATTEMPTS = 3;    // default cap when verifyText is on
-
-// FC-020: how many of the first rendered pages are pinned as fixed "canonical"
-// in-scene anchors that every later page references. Pinning the first K (not an
-// accumulating chain) means a later page's drift can't propagate, and lets pages
-// K+1..N generate in parallel (no inter-page dependency). Validated at K=2.
-const CANONICAL_ANCHOR_PAGES = 2;
-// Cap on simultaneous page generations in the parallel phase, to bound peak
-// memory / open connections (multimodal payloads are ~4-5MB each). Tunable.
-const PAGE_GEN_CONCURRENCY = 4;
-
-export function bakedTextPasses(s: BakedTextScore): boolean {
-  return s.recall >= TEXT_RECALL_MIN && s.precision >= TEXT_PRECISION_MIN;
-}
-export function bakedTextF1(s: BakedTextScore): number {
-  return s.precision + s.recall ? (2 * s.precision * s.recall) / (s.precision + s.recall) : 0;
-}
-
-/**
- * FC-020: the verify-and-regenerate contract, as a pure function over a fixed
- * sequence of candidate scores. The real loop in generateIllustration mirrors
- * this exactly (it carries image bytes alongside, so it can't call this
- * directly) — keep the two in sync. Stops at the first passing candidate;
- * otherwise runs the whole sequence and keeps the highest-F1 one.
- */
-export function simulateVerifyLoop(scores: BakedTextScore[]): { keptIndex: number; attempts: number } {
-  let keptIndex = -1;
-  let bestF1 = -1;
-  for (let i = 0; i < scores.length; i++) {
-    const f1 = bakedTextF1(scores[i]);
-    if (f1 > bestF1) {
-      bestF1 = f1;
-      keptIndex = i;
-    }
-    if (bakedTextPasses(scores[i])) return { keptIndex: i, attempts: i + 1 };
-  }
-  return { keptIndex, attempts: scores.length };
-}
-
-/**
- * FC-020: run an async mapper over items with a bounded concurrency, preserving
- * input order in the result. Used for the parallel page-generation phase so a
- * 12-page story doesn't fire all image calls at once.
- */
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (true) {
-      const i = next++;
-      if (i >= items.length) break;
-      results[i] = await fn(items[i], i);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
-/**
- * FC-020: split pages into the first K (generated sequentially to establish
- * canonical anchors) and the rest (generated in parallel against those anchors).
- * Clamps K to [0, length]. Pure — unit-tested.
- */
-export function splitForAnchoring<T>(pages: T[], k: number): { sequential: T[]; parallel: T[] } {
-  const n = Math.max(0, Math.min(k, pages.length));
-  return { sequential: pages.slice(0, n), parallel: pages.slice(n) };
 }
 
 // Model constants
