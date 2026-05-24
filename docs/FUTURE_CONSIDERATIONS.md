@@ -39,33 +39,6 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ## Active Considerations
 
-### FC-020: Migrate production to baked-in text + OCR text-repair; delete Skia overlay
-
-**Status:** Plan drafted — awaiting approval
-**Size estimate:** L
-**Owner:** Zeshan / Claude
-**Plan file:** `docs/plans/fc-020.md`
-
-**Problem / opportunity:** FC-019's spike decided production should bake narration text INTO the
-illustration (Gemini 3.1 Flash) — anchored by the FC-013 character machinery (model-sheets + cast
-lineup + pin-first-K canonical anchors) and guarded by OCR detect-and-regenerate for Flash's ~10%
-stochastic text jumbles (recall ≥ 0.6 AND precision ≥ 0.75; precision is what catches the
-hallucinated-extra-text failure mode). Pro was rejected for unfixable character drift. This FC
-promotes those proven mechanics into the production `generateAllIllustrations` path and **fully
-deletes** the FC-015/FC-018 Skia overlay code (user decision: no flag, no fallback). Shipped
-**synchronously** now (Option C); the durable 600 s timeout fix is deferred to FC-017 (async job
-model), which lands as the next FC in sequence.
-
-**Key decisions baked in:** existing stories won't be back-filled (internal-testing-only app, so
-the blank-gap break is acceptable); first-K pages generated sequentially then the rest in parallel
-(timeout lever); production attempt cap 2; a backend test framework (Vitest) is stood up since this
-is a production behavior change.
-
-**Open questions:** production attempt cap 2 vs 3; canonical-anchor K fixed at 2 vs scale with
-length; parallel-batch concurrency cap (from the 12-page integration test).
-
----
-
 ### FC-003: Text-to-speech narration
 
 **Status:** Consideration
@@ -199,10 +172,12 @@ OCR detect-and-regenerate; reject Pro (char drift); exclude Recraft.** Productio
 
 ### FC-017: Story generation reliability — request resumes / async job model
 
-**Status:** Consideration
+**Status:** Consideration — **next FC in sequence** (FC-020 shipped the sync model; this is the durable fix)
 **Size estimate:** L (likely architecture refactor)
 **Owner:** unassigned
 **Plan file:** not yet
+
+**FC-020 evidence (2026-05-24):** an 8-page production story took **440s** wall-clock, of which the **character-reference stage alone was ~332s** — one ref hit a 503 and took ~331s (Gemini image latency is non-deterministic, 5-15× over spec per [session 2026-04-28]). The page stage (baked text + OCR) was only ~62s. Two takeaways for this FC: (1) the sync model's real failure mode is a slow/again-retried char ref pushing total past the mobile 600s client timeout — when that fires the **backend keeps running to 3600s, finishes, and saves the story**, so the user sees an error but the story silently appears later (a resume/notify model fixes exactly this); (2) char refs are the stage most worth making resumable/cached. The 600s ceiling is the **client axios timeout** (`mobile/services/api.ts`), NOT Cloud Run (3600s, pinned in `cloudbuild.yaml`).
 
 **Problem / opportunity:** Today story generation is a single synchronous HTTP request that runs for 3-5 minutes (FC-013 + FC-012 + FC-015 pipeline). Real failure observed 2026-05-12: ~9.5 min into a request, the Cloud Run instance handling it died (likely cascading from a `TypeError: fetch failed sending request` blip between Cloud Run and Gemini API while generating a character reference). The request was ~80% done — had story text, 1 of 2 char refs, title page; was mid page-1 generation. A new Cloud Run instance booted but did NOT pick up the orphaned request. Mobile client (10 min HTTP timeout) just waited until timeout, then surfaced a generic failure to the user. **80%+ of the work was already paid for and got thrown away.**
 
@@ -239,6 +214,8 @@ This isn't a one-off — any 3-5 min synchronous request is fragile by definitio
 **Owner:** unassigned
 **Plan file:** not yet (research must precede a plan)
 
+**Update — FC-020 reframed the bottleneck (2026-05-24):** the page-parallelization lever this entry hypothesizes was largely *implemented* by FC-020 (pages now generate parallel against fixed canonical anchors; the page stage is only ~62s for 8 pages). The dominant cost is now unambiguously the **character-reference stage** (~332s in one measured 8-page run, driven by non-deterministic Gemini image latency + a 503 retry). The highest-leverage latency work left is **char-ref generation** — caching/reuse, downscaling ref images, a faster ref path, or generating fewer refs — NOT further page parallelization. Re-scope this FC's research around char refs.
+
 **Problem / opportunity:** Total story generation time is 3-5 min for a medium (6-page) story under the FC-013 + FC-012 + FC-015 pipeline (~200-260s typical, longer on Gemini tail latency). The parent overhaul plan accepted this as a real UX cost; with the app live, it's worth investigating whether the post-FC-013 architecture lets us reclaim some of that time.
 
 **Hypothesis to investigate (per user 2026-05-12):** with FC-013's per-character reference image framework in place, we may be able to parallelize MORE of the per-page generation than we currently do. Today's pipeline runs:
@@ -266,6 +243,14 @@ The serial bottleneck is `title page → page 1 → pages 2..N` because pages 2.
 ---
 
 ## Completed
+
+### FC-020: Baked-in text + OCR text-repair; delete Skia overlay — Done 2026-05-24
+
+Migrated the production image pipeline to bake narration text INTO the illustration (Gemini 3.1 Flash) with OCR detect-and-regenerate (recall ≥ 0.6 AND precision ≥ 0.75; precision catches the hallucinated-extra-text jumble), anchored by char model-sheets + cast lineup + pin-first-K canonical anchors. Fully deleted the FC-015/FC-018 Skia overlay. Stood up Vitest (22 tests). Adversarial review (REQUEST_CHANGES → CONFIRMED-CLEAN): added a char-ref image cap, tightened `isRetryableError`, fixed the timeout framing. Live-validated on an 8-page story (all pages OCR-clean, character consistency held). Latency finding: char-ref stage dominates wall-clock (~332s of 440s) → FC-017/FC-016. Breaking: pre-FC-020 stories render with a blank gap (no back-fill).
+
+- **Plan:** [docs/plans/fc-020.md](plans/fc-020.md)
+- **Investigation:** [docs/investigations/fc-019-text-paradigm-comparison-2026-05-16.md](investigations/fc-019-text-paradigm-comparison-2026-05-16.md)
+- **PR:** [#21](https://github.com/memon1987/ai-storybook-app/pull/21) (squash-merged as `e3418a0`)
 
 ### FC-001: Frontend redesign (Figma v2) — Done 2026-04-24
 
