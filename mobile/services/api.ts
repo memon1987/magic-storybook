@@ -11,7 +11,12 @@ if (!API_URL || /XXXX/.test(API_URL)) {
 // Create axios instance
 const api: AxiosInstance = axios.create({
   baseURL: API_URL,
-  timeout: 600000, // 10 minutes — story + 4-12 illustrations + 503 retries (Cloud Run timeout is 600s)
+  // 10 min. This CLIENT timeout is the binding ceiling for synchronous story
+  // generation — the backend (Cloud Run) allows up to 3600s, so if this fires
+  // the server keeps running, finishes, and saves the story to Firestore even
+  // though the client surfaced an error (the story appears in the library on
+  // next load). FC-017 (async job model) is the durable fix.
+  timeout: 600000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -63,32 +68,13 @@ export interface StoryInput {
   artStyle?: ArtStyle;
 }
 
-// FC-015: where the narration overlay sits on each page. Server-provided per
-// page; absence (older stories) means "no overlay — text is baked in image".
-export type TextPosition = 'top' | 'bottom' | 'left' | 'right' | 'center-overlay';
-
-// FC-015: maps the writing-style picked at creation time to the font family
-// used to render the narration overlay. Keys mirror WritingStyleId. Adding a
-// new writing style requires also adding a font entry — `Record<WritingStyleId, …>`
-// makes tsc enforce that.
-export const WRITING_STYLE_FONT_MAP: Record<WritingStyleId, string> = {
-  'bouncy-rhymes':   'Baloo 2',
-  'gentle-refrains': 'Nunito',
-  'sweet-simple':    'Quicksand',
-};
-
-// Font family used for the narration overlay when the story has no
-// writingStyle set (legacy authorStyle path or older stories).
-export const DEFAULT_OVERLAY_FONT = 'Nunito';
-
 export interface StoryPage {
   pageNumber: number;
   text: string;
   imageUrl: string;
-  // FC-015: optional Skia overlay metadata. Pre-FC-015 pages omit these
-  // (server returns null on the wire); reader interprets absence as
-  // "no overlay — text is baked in image" and renders nothing on top.
-  textPosition?: TextPosition | null;
+  // FC-020: narration is baked into the image. These fields are still returned
+  // by the API (baked illustration guidance) but the reader no longer renders
+  // anything from them — text is part of the illustration.
   soundEffects?: string[] | null;
   emphasizedWords?: string[] | null;
 }

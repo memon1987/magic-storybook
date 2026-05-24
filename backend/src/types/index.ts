@@ -27,32 +27,17 @@ export interface StoryInput {
 // Art styles for illustrations
 export type ArtStyle = 'watercolor' | 'cartoon' | 'storybook-classic' | 'claymation' | 'studio-ghibli' | 'pixar-3d';
 
-// FC-015: where narration text lands on the page (composed in the Skia overlay
-// on the mobile reader, NOT baked into the image). The illustration prompt
-// reserves negative space at the indicated position so the overlay reads cleanly.
-// `center-overlay` is reserved for emphatic short lines that sit on top of the
-// illustration with a translucent backing rect.
-export type TextPosition = 'top' | 'bottom' | 'left' | 'right' | 'center-overlay';
-
-export const TEXT_POSITIONS: readonly TextPosition[] = [
-  'top',
-  'bottom',
-  'left',
-  'right',
-  'center-overlay',
-] as const;
-
 // Generated story page
 export interface StoryPage {
   pageNumber: number;
   text: string;
   sceneDescription: string;
-  // FC-015: optional fields. Older stories generated before FC-015 won't have
-  // these; the mobile reader treats their absence as "no overlay — text is
-  // baked into the image" (legacy render path).
-  textPosition?: TextPosition;
+  // FC-020: baked-text illustration guidance (the FC-015 Skia overlay + its
+  // textPosition were removed). soundEffects render as stylized onomatopoeia
+  // IN the image; emphasizedWords (a subset of `text`) are accented in the
+  // baked narration.
   soundEffects?: string[];      // 0-2 short single onomatopoeia words rendered IN the image
-  emphasizedWords?: string[];   // subset of `text`; rendered larger/accented in the overlay
+  emphasizedWords?: string[];   // subset of `text`; baked larger/accented
 }
 
 // FC-012: title page (cover) — distinct from content pages.
@@ -113,11 +98,12 @@ export interface StoryDocument {
   artStyle: ArtStyle;
   status: 'pending' | 'generating' | 'complete' | 'failed';
   pageCount?: number;
-  characterReferenceUrls?: Record<string, string>;  // FC-013
-  characterSheets?: CharacterVisualSheet[];         // FC-019: persisted for spike route reload
-  settingIdentity?: SettingVisualIdentity;          // FC-019: persisted for spike route reload
+  characterReferenceUrls?: Record<string, string>;  // FC-013 (per-character model sheets)
+  characterSheets?: CharacterVisualSheet[];         // FC-019/020: textual character identities
+  settingIdentity?: SettingVisualIdentity;          // FC-019/020: textual setting identity
   titlePage?: TitlePage;                            // FC-012
   titlePageImageUrl?: string;                       // FC-012 (Cloud Storage URL)
+  castReferenceUrl?: string;                        // FC-020 (cast lineup ref; >1 character)
   createdAt: FirebaseFirestore.Timestamp;
 }
 
@@ -128,8 +114,7 @@ export interface PageDocument {
   text: string;
   sceneDescription: string;
   imageUrl: string;
-  // FC-015: optional overlay metadata
-  textPosition?: TextPosition;
+  // FC-020: baked-text illustration guidance (textPosition removed with the overlay)
   soundEffects?: string[];
   emphasizedWords?: string[];
 }

@@ -114,7 +114,7 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
 
     // Step 2: Generate all illustrations (FC-013: per-character refs upfront; FC-012: title page)
     console.log('Step 2: Generating illustrations...');
-    const { pageUrls, characterReferenceUrls, titlePageImageUrl } = await generateAllIllustrations(
+    const { pageUrls, characterReferenceUrls, titlePageImageUrl, castReferenceUrl } = await generateAllIllustrations(
       story,
       storyId,
       favoriteAnimal,
@@ -128,15 +128,14 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
 
     story.pages.forEach((page, index) => {
       const pageRef = storyRef.collection('pages').doc();
-      // FC-015: persist new optional overlay fields when present so the reader
-      // can render the Skia text layer. Conditional spreads keep absent fields
-      // out of Firestore (rather than writing undefined, which Firestore rejects).
+      // FC-020: persist the baked-text guidance fields when present (the FC-015
+      // textPosition was removed with the Skia overlay). Conditional spreads keep
+      // absent fields out of Firestore (writing undefined is rejected).
       batch.set(pageRef, {
         pageNumber: page.pageNumber,
         text: page.text,
         sceneDescription: page.sceneDescription,
         imageUrl: pageUrls[index],
-        ...(page.textPosition ? { textPosition: page.textPosition } : {}),
         ...(page.soundEffects && page.soundEffects.length > 0 ? { soundEffects: page.soundEffects } : {}),
         ...(page.emphasizedWords && page.emphasizedWords.length > 0 ? { emphasizedWords: page.emphasizedWords } : {}),
       });
@@ -148,13 +147,9 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       status: 'complete',
       pageCount: story.pages.length,
       characterReferenceUrls, // FC-013: persist character ref URLs (empty object when not used)
-      // FC-013/FC-019: persist the textual character sheets + setting identity
-      // (not just the rendered ref URLs). These were previously discarded
-      // after generation, which left the spike route (FC-019) blind on
-      // character anchoring inputs when it re-rendered Variant B against
-      // an existing story. Persisting them costs ~1-2 KB / story; their
-      // absence on pre-FC-019 stories degrades to no-prompt-anchor for
-      // those (FC-019 spike then needs to use only post-FC-019 stories).
+      // FC-013/FC-020: persist the textual character sheets + setting identity
+      // (not just the rendered ref URLs) — they anchor character/setting prompts
+      // and would be useful for any future regeneration. Costs ~1-2 KB / story.
       ...(story.characterSheets && story.characterSheets.length > 0
         ? { characterSheets: story.characterSheets }
         : {}),
@@ -163,6 +158,7 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
         : {}),
       ...(story.titlePage ? { titlePage: story.titlePage } : {}),                      // FC-012
       ...(titlePageImageUrl ? { titlePageImageUrl } : {}),                              // FC-012
+      ...(castReferenceUrl ? { castReferenceUrl } : {}),                                // FC-020
     });
 
     await batch.commit();
@@ -192,9 +188,8 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
         pageNumber: page.pageNumber,
         text: page.text,
         imageUrl: pageUrls[index],
-        // FC-015: surface overlay metadata so the reader can render text on the
-        // very first generation response (before re-fetching from Firestore).
-        textPosition: page.textPosition ?? null,
+        // FC-020: text is baked into the image; these remain for parity with the
+        // stored fields (the reader no longer renders an overlay from them).
         soundEffects: page.soundEffects ?? null,
         emphasizedWords: page.emphasizedWords ?? null,
       })),

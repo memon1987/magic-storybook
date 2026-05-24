@@ -3,7 +3,6 @@ import cors from 'cors';
 import helmet from 'helmet';
 import admin from 'firebase-admin';
 import storiesRouter from './routes/stories';
-import spikeRouter from './routes/spike';
 
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
@@ -39,10 +38,6 @@ app.get('/health', (req, res) => {
 
 // API routes
 app.use('/api/stories', storiesRouter);
-// FC-019 spike route — dev-only text-paradigm comparison. Behavior is gated
-// by SPIKE_USE_PRO_IMAGE / SPIKE_USE_RECRAFT env vars; with both OFF the
-// route exists but every variant returns enabled:false (no model calls made).
-app.use('/api/spike', spikeRouter);
 
 // 404 handler
 app.use((req, res) => {

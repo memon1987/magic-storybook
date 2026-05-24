@@ -1,4 +1,4 @@
-import { ArtStyle, CharacterVisualSheet, SettingVisualIdentity, TextPosition } from '../types';
+import { ArtStyle, CharacterVisualSheet, SettingVisualIdentity } from '../types';
 
 /**
  * Style descriptions for different art styles
@@ -13,52 +13,19 @@ const STYLE_DESCRIPTIONS: Record<ArtStyle, string> = {
 };
 
 /**
- * FC-015: instructions for reserving negative space at the chosen text position.
- * The mobile Skia overlay paints narration text into this reserved zone, so
- * the illustrator's job is to keep that part of the image clean and uncluttered.
+ * Build an illustration prompt for Gemini image generation.
+ * Features: character-sheet consistency, narration baked into the image with a
+ * clear reading flow, playful sound-effect lettering, and accented emphasis.
  *
- * FC-018: tightened with explicit negative constraints. Earlier soft phrasing
- * ("low-detail negative space", "soft wash") still occasionally caused Gemini
- * to paint a literal white rectangle — the very artifact the Skia overlay
- * replaces, now showing up baked in the image. Each entry now includes:
- *   1. A concrete organic example of what the reservation should look like
- *      ("treat the top 22% as open sky with no characters, no clouds...")
- *   2. An explicit NEGATIVE constraint enumerating the bad outcomes (literal
- *      box, banner, panel, solid color block).
- *   3. Framing as a *compositional choice*, not a *graphic element*.
- */
-const TEXT_POSITION_RESERVATION: Record<TextPosition, string> = {
-  'top':
-    'Reserve the TOP ~22% of the page as quiet, low-detail negative space — for example: open sky, a soft atmospheric haze, blurred distant treetops, or a calm watercolor wash that blends with the scene below. WITHIN THIS TOP BAND SPECIFICALLY, avoid clouds, birds, or busy detail (these are welcome elsewhere in the scene if the story calls for them — just keep them out of this reserved band). Keep the focal character entirely below this band. DO NOT paint a literal white box, banner, panel, color-block, or rectangular card in this area. The reservation is a *compositional choice* (open sky, calm haze) — NOT a *graphic element*.',
-  'bottom':
-    'Reserve the BOTTOM ~22% of the page as quiet, low-detail negative space — for example: foreground grass that fades to a single tone, calm water, smooth sand, or a soft warm wash that blends with the scene above. WITHIN THIS BOTTOM BAND SPECIFICALLY, avoid ripples, scattered objects, or busy detail (these are welcome elsewhere in the scene if the story calls for them — just keep them out of this reserved band). Keep the focal character entirely above this band. DO NOT paint a literal white box, banner, panel, color-block, or rectangular card in this area. The reservation is a *compositional choice* (calm ground or water) — NOT a *graphic element*.',
-  'left':
-    'Reserve the LEFT ~30% of the page as quiet, low-detail negative space — for example: open sky, a distant softly washed mountain or forest, foliage simplified to a single mood color, calm sea, or a misty atmospheric blur. WITHIN THIS LEFT THIRD SPECIFICALLY, avoid clouds, birds, or busy detail (these are welcome on the right two-thirds if the story calls for them — just keep them out of this reserved band). Compose the focal character and busy detail on the RIGHT two-thirds of the page. DO NOT paint a literal white box, banner, panel, color-block, or rectangular card on the left. The reservation is a *compositional choice* (an organic part of the scene) — NOT a *graphic element*.',
-  'right':
-    'Reserve the RIGHT ~30% of the page as quiet, low-detail negative space — for example: open sky, a distant softly washed mountain or forest, foliage simplified to a single mood color, calm sea, or a misty atmospheric blur. WITHIN THIS RIGHT THIRD SPECIFICALLY, avoid clouds, birds, or busy detail (these are welcome on the left two-thirds if the story calls for them — just keep them out of this reserved band). Compose the focal character and busy detail on the LEFT two-thirds of the page. DO NOT paint a literal white box, banner, panel, color-block, or rectangular card on the right. The reservation is a *compositional choice* (an organic part of the scene) — NOT a *graphic element*.',
-  'center-overlay':
-    'Compose the scene normally, but ensure the CENTER of the page (roughly the middle third, both horizontally and vertically) is calm enough that a typography halo can sit on top of it without obscuring the focal character. Keep the focal character\'s face OUT of the dead center. DO NOT paint a literal white box, banner, panel, color-block, or rectangular card in the center — the overlay is a soft, transparent halo, not a card. The center should look like a normal part of the scene that simply has fewer competing visual elements.',
-};
-
-/**
- * Build an illustration prompt for Gemini image generation
- * Features: character sheet consistency, clear text reading flow
+ * FC-013: when `characterReferences` is non-empty, the call also attaches those
+ * character ref images as multimodal inputs (built by gemini.ts). The prompt
+ * body numbers them so the model can correlate the "Character reference 1: NAME"
+ * labels in `contents` with the prompt text.
  *
- * FC-013: when `characterReferences` is non-empty, the call also attaches
- * those character ref images as multimodal inputs (built by gemini.ts).
- * The prompt body explicitly numbers them so the model can correlate the
- * "Character reference 1: NAME" labels in `contents` with the prompt text.
- *
- * FC-015: there are now two mutually-exclusive text paths.
- *   - LEGACY (`pageText` provided, `textPosition` undefined): bake narration
- *     into the image at the bottom band. Used by stories generated before
- *     FC-015 if they're ever regenerated.
- *   - NEW (`textPosition` provided, `pageText` undefined): do NOT bake
- *     narration. Reserve negative space at the chosen position so the mobile
- *     reader can paint a Skia text overlay there. `soundEffects` (single
- *     stylized words like "Boom!", "Splash!") may still be rendered IN the
- *     image when present — these are short enough that Gemini handles them
- *     reliably and they look intentional, not like spelling errors.
+ * FC-020: narration text is BAKED INTO the image (the FC-015/018 Skia overlay
+ * was removed). `pageText` is the exact narration; `soundEffects` are short
+ * stylized onomatopoeia; `emphasizedWords` (a subset of pageText) are accented.
+ * When `pageText` is empty the page renders with no text (defensive fallback).
  */
 export function buildIllustrationPrompt(
   sceneDescription: string,
@@ -68,7 +35,6 @@ export function buildIllustrationPrompt(
   characterSheets?: CharacterVisualSheet[],
   settingIdentity?: SettingVisualIdentity,
   characterReferences?: Array<{ name: string }>,
-  textPosition?: TextPosition,
   soundEffects?: string[],
   emphasizedWords?: string[],
 ): string {
@@ -101,36 +67,11 @@ CONSISTENCY IS CRITICAL: The characters described above must look IDENTICAL on e
 ${settingIdentity.name}: ${settingIdentity.description}`
     : '';
 
-  // FC-015: choose between legacy in-image text (when pageText is supplied and
-  // textPosition is NOT — old code path) vs new negative-space reservation
-  // (when textPosition is supplied — new path; narration is rendered as a
-  // Skia overlay on the mobile reader and must NOT be baked into the image).
+  // FC-020: narration is baked into the image. Fallback to "no text" only when
+  // pageText is empty (defensive — production always supplies it).
   let textInstructions: string;
 
-  if (textPosition) {
-    // NEW PATH: reserve negative space; narration will be overlaid by the app.
-    const reservation = TEXT_POSITION_RESERVATION[textPosition];
-    const soundEffectsBlock =
-      soundEffects && soundEffects.length > 0
-        ? `
-STYLIZED SOUND-EFFECT WORDS IN-IMAGE (FC-015):
-- Render ONLY these short stylized words IN the illustration near the relevant action: ${soundEffects.map((w) => `"${w}"`).join(', ')}
-- These are sound effects (e.g., "Boom!", "Splash!") — render them in expressive comic-style typography that fits the moment
-- Keep each word small-to-medium and complementary to the scene; never dominant
-- Do NOT add any other words. Do NOT add narration. Do NOT add labels, captions, or signs containing other text`
-        : `
-NO OTHER TEXT IN THE IMAGE (FC-015):
-- Do NOT render narration, captions, dialogue text, labels, signs, or letters of any kind in the illustration
-- The narrative text for this page is rendered separately as a typography overlay by the reader app — your image should contain ZERO words`;
-
-    textInstructions = `
-TEXT LAYOUT — RESERVE NEGATIVE SPACE FOR OVERLAY (FC-015):
-${reservation}
-
-The narrative text for this page is NOT baked into the image. The mobile reader composes it as a Skia typography overlay positioned exactly in the reserved zone above. Your job is to keep that zone clean and uncluttered so the overlay reads sharply.
-${soundEffectsBlock}`;
-  } else if (pageText) {
-    // LEGACY PATH: bake narration into the image at the bottom band.
+  if (pageText) {
     textInstructions = `
 TEXT TO EMBED IN THE IMAGE (EXACT WORDS - DO NOT CHANGE):
 "${pageText}"
@@ -184,19 +125,10 @@ TEXT STYLING:
 IMPORTANT: NO text, words, letters, or numbers in the image`;
   }
 
-  // Composition guidance shifts depending on path:
-  //   - LEGACY (pageText baked in): keep the historical "TEXT ZONE / ILLUSTRATION ZONE" rule
-  //   - FC-015 (textPosition reserved): describe the reservation contract instead
-  //   - No-text fallback: just say "fully illustrated, no text zone"
+  // Composition guidance: baked-text page keeps the "TEXT ZONE / ILLUSTRATION
+  // ZONE" rule; the no-text fallback is "fully illustrated, no text zone".
   let compositionBlock: string;
-  if (textPosition) {
-    compositionBlock = `COMPOSITION:
-- This is a FULL picture book page composed in landscape orientation
-- The narrative text overlay will be painted by the reader app at the position described in TEXT LAYOUT above — keep that zone calm and uncluttered
-- The illustration occupies the full page; the focal character/action belongs in the OPPOSITE region from the reserved text zone
-- Use a clear focal point (characters should be prominent)
-- Landscape orientation (wider than tall)`;
-  } else if (pageText) {
+  if (pageText) {
     compositionBlock = `COMPOSITION:
 - This is a FULL picture book page with a clear TEXT ZONE and ILLUSTRATION ZONE
 - The text zone (bottom band) blends softly into the illustration through a gradient or soft wash
