@@ -242,6 +242,37 @@ The serial bottleneck is `title page → page 1 → pages 2..N` because pages 2.
 
 ---
 
+### FC-021: GCP-side latency levers (Vertex AI endpoint, Provisioned Throughput, Cloud Run cold-start)
+
+**Status:** Consideration — **on hold pending FC-016 Phase 3 outcome** (open 2026-05-26: review and assess only if FC-016's char-ref levers don't hit the p50 ≤ 90s / p95 ≤ 180s targets)
+**Size estimate:** M (mostly measurement + config; small code touch to swap the SDK endpoint if Vertex AI wins)
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** FC-016's plan focuses on application-level levers (caching, fewer refs, downscaling, per-call timeout). It does not touch the GCP infrastructure layer — and **most GCP-side levers won't help latency** because we're network-bound on Gemini's response, not CPU/memory-bound on Cloud Run. But three GCP-side ideas are worth measuring **if FC-016 alone doesn't close the gap**, because they target the same char-ref bottleneck from a different angle (Gemini-side capacity instead of our-side call patterns).
+
+This FC exists to capture those ideas before they get lost, NOT to compete with FC-016. The intent is: if FC-016 Phase 3 ships and we still see p95 char-ref > 180s, this FC becomes the next step.
+
+**Three levers to evaluate (ranked by expected impact):**
+
+1. **Vertex AI endpoint vs AI Studio API.** Same Gemini models (`gemini-3.1-flash-image-preview`) are served via two distinct GCP surfaces: AI Studio (what we use today via `@google/genai`) and Vertex AI (GCP-native, region-pinned, separate quota pool). Vertex AI in `us-central1` co-located with our Cloud Run service may show: (a) tighter tail-latency distribution (fewer 503s — our 332s outlier was driven by one ref's 503 retry); (b) better quota guarantees; (c) lower network RTT. Worth a head-to-head A/B with 5 stories per endpoint, same FC-002 methodology. Implementation cost is ~1 day — swap the SDK client init, gate behind an env flag.
+
+2. **Vertex AI Provisioned Throughput** (if Google exposes it for Nano Banana 2 / Imagen-flavored endpoints). Reserved capacity caps the tail by guaranteeing GPU/TPU is available. Eliminates the 503-on-Gemini class of failure that drove the 331s outlier. Likely $100s/mo minimum — only justified once usage warrants it (i.e. post-launch). Investigate pricing + availability first; if not available for this model, drop this lever.
+
+3. **Cloud Run `min-instances=1`.** Eliminates cold-start (~2-5s on first request after idle). Tiny slice of a 440s run, so it does NOT help typical-case latency. Real justification is **FC-017 reliability** (a Resume firing on a cold instance adds 2-5s to the recovery path; min=1 makes Resume responsive). ~$15/mo. Decision belongs as much to FC-017 as to this FC.
+
+**Open questions:**
+
+- Does Vertex AI's `gemini-3.1-flash-image-preview` exist with the same capability surface (baked-text, multimodal char refs as inputs) we depend on? Need to verify before A/B.
+- Is the Vertex AI SDK (`@google-cloud/vertexai`) a drop-in for the response shape we consume in `backend/src/services/gemini.ts` (the `response.candidates[0].content.parts[].inlineData` pattern)? If not, the swap is bigger than 1 day.
+- Provisioned Throughput: is it sold for image-generation models at all, or only text? (As of cutoff, primarily a text-LLM offering.)
+- Does our current AI Studio quota show any rate-limiting at our usage levels? (Probably no — we're far below limits — but if yes, Vertex AI's separate quota is a free win.)
+- Are there other GCP-side levers we're missing? Cloud CDN won't help inference. Memorystore vs Firestore for the FC-016 cache saves ~30ms on a 332s stage — negligible. Cloud Run gen2 vs gen1 — confirm we're on gen2, but not a latency mover.
+
+**When to revisit:** after FC-016 Phase 3 ships and we have 20+ production stories' worth of latency data on the post-FC-016 pipeline. If p95 char-ref ≤ 180s sustained, close this FC as superseded. If still > 180s, promote Vertex AI A/B to a plan file.
+
+---
+
 ## Completed
 
 ### FC-020: Baked-in text + OCR text-repair; delete Skia overlay — Done 2026-05-24
