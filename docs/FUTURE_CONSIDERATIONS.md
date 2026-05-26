@@ -172,7 +172,7 @@ OCR detect-and-regenerate; reject Pro (char drift); exclude Recraft.** Productio
 
 ### FC-017: Story generation reliability — request resumes / async job model
 
-**Status:** Consideration — **next FC in sequence** (FC-020 shipped the sync model; this is the durable fix)
+**Status:** Consideration — **deferred** (user 2026-05-26: revisit after a working end-to-end prototype lands; the sync model FC-020 shipped is acceptable for prototype testing)
 **Size estimate:** L (likely architecture refactor)
 **Owner:** unassigned
 **Plan file:** not yet
