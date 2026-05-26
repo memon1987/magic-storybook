@@ -172,10 +172,10 @@ OCR detect-and-regenerate; reject Pro (char drift); exclude Recraft.** Productio
 
 ### FC-017: Story generation reliability — request resumes / async job model
 
-**Status:** Consideration — **deferred** (user 2026-05-26: revisit after a working end-to-end prototype lands; the sync model FC-020 shipped is acceptable for prototype testing)
+**Status:** Plan published (2026-05-26)
 **Size estimate:** L (likely architecture refactor)
 **Owner:** unassigned
-**Plan file:** not yet
+**Plan file:** [docs/plans/fc-017.md](plans/fc-017.md)
 
 **FC-020 evidence (2026-05-24):** an 8-page production story took **440s** wall-clock, of which the **character-reference stage alone was ~332s** — one ref hit a 503 and took ~331s (Gemini image latency is non-deterministic, 5-15× over spec per [session 2026-04-28]). The page stage (baked text + OCR) was only ~62s. Two takeaways for this FC: (1) the sync model's real failure mode is a slow/again-retried char ref pushing total past the mobile 600s client timeout — when that fires the **backend keeps running to 3600s, finishes, and saves the story**, so the user sees an error but the story silently appears later (a resume/notify model fixes exactly this); (2) char refs are the stage most worth making resumable/cached. The 600s ceiling is the **client axios timeout** (`mobile/services/api.ts`), NOT Cloud Run (3600s, pinned in `cloudbuild.yaml`).
 
@@ -209,10 +209,10 @@ This isn't a one-off — any 3-5 min synchronous request is fragile by definitio
 
 ### FC-016: Story generation latency reduction (deep research)
 
-**Status:** Consideration
+**Status:** Plan published (2026-05-26)
 **Size estimate:** M-L (research first, then implementation)
 **Owner:** unassigned
-**Plan file:** not yet (research must precede a plan)
+**Plan file:** [docs/plans/fc-016.md](plans/fc-016.md)
 
 **Update — FC-020 reframed the bottleneck (2026-05-24):** the page-parallelization lever this entry hypothesizes was largely *implemented* by FC-020 (pages now generate parallel against fixed canonical anchors; the page stage is only ~62s for 8 pages). The dominant cost is now unambiguously the **character-reference stage** (~332s in one measured 8-page run, driven by non-deterministic Gemini image latency + a 503 retry). The highest-leverage latency work left is **char-ref generation** — caching/reuse, downscaling ref images, a faster ref path, or generating fewer refs — NOT further page parallelization. Re-scope this FC's research around char refs.
 
