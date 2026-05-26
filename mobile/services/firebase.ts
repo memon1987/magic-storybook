@@ -10,12 +10,23 @@ import {
 
 const PLACEHOLDER_PATTERN = /^(your-|XXXX|0000)/;
 
-function readRequired(names: readonly string[]): Record<string, string> {
+// Static literal accesses to process.env so Metro/Babel can inline EXPO_PUBLIC_*
+// at bundle time. Dynamic process.env[name] is NOT inlined — values come back
+// undefined at runtime in Release builds.
+const RAW_ENV = {
+  EXPO_PUBLIC_FIREBASE_API_KEY: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
+  EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  EXPO_PUBLIC_FIREBASE_PROJECT_ID: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
+  EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  EXPO_PUBLIC_FIREBASE_APP_ID: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
+} as const;
+
+function validate(raw: typeof RAW_ENV): Record<keyof typeof RAW_ENV, string> {
   const missing: string[] = [];
   const placeholder: string[] = [];
   const values: Record<string, string> = {};
-  for (const name of names) {
-    const v = process.env[name];
+  for (const [name, v] of Object.entries(raw)) {
     if (!v) {
       missing.push(name);
     } else if (PLACEHOLDER_PATTERN.test(v)) {
@@ -32,19 +43,10 @@ function readRequired(names: readonly string[]): Record<string, string> {
       `${parts.join('; ')}. Copy mobile/.env.example to mobile/.env and populate with real values.`
     );
   }
-  return values;
+  return values as Record<keyof typeof RAW_ENV, string>;
 }
 
-const FIREBASE_VARS = [
-  'EXPO_PUBLIC_FIREBASE_API_KEY',
-  'EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN',
-  'EXPO_PUBLIC_FIREBASE_PROJECT_ID',
-  'EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET',
-  'EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID',
-  'EXPO_PUBLIC_FIREBASE_APP_ID',
-] as const;
-
-const env = readRequired(FIREBASE_VARS);
+const env = validate(RAW_ENV);
 const firebaseConfig = {
   apiKey: env.EXPO_PUBLIC_FIREBASE_API_KEY,
   authDomain: env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
