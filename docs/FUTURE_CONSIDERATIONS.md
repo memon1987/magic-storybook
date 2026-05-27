@@ -172,7 +172,7 @@ OCR detect-and-regenerate; reject Pro (char drift); exclude Recraft.** Productio
 
 ### FC-017: Story generation reliability — request resumes / async job model
 
-**Status:** Plan published (2026-05-26)
+**Status:** Executing — Phase 1 instrumentation merged (PR #23, `f5f9cb5`, 2026-05-27); Phase 1 investigation note + Phases 2-4 still pending
 **Size estimate:** L (likely architecture refactor)
 **Owner:** unassigned
 **Plan file:** [docs/plans/fc-017.md](plans/fc-017.md)
@@ -209,7 +209,7 @@ This isn't a one-off — any 3-5 min synchronous request is fragile by definitio
 
 ### FC-016: Story generation latency reduction (deep research)
 
-**Status:** Plan published (2026-05-26)
+**Status:** Executing — Phase 1 instrumentation merged (PR #23, `f5f9cb5`, 2026-05-27); Phase 1 baseline sweep + investigation note + Phases 2-4 still pending
 **Size estimate:** M-L (research first, then implementation)
 **Owner:** unassigned
 **Plan file:** [docs/plans/fc-016.md](plans/fc-016.md)
