@@ -7,6 +7,7 @@ import {
   generateStory,
   generateAllIllustrations,
 } from '../services/gemini';
+import { emitStageEvent, storyTag } from '../services/instrumentation';
 import {
   AuthRequest,
   StoryInput,
@@ -77,12 +78,12 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
     return;
   }
 
+  const storyId = uuid();
+  const startTime = Date.now();
   try {
-    const storyId = uuid();
     const storyRef = db.collection('stories').doc(storyId);
 
-    console.log(`Starting story generation for user ${userId}, story ${storyId}`);
-    const startTime = Date.now();
+    console.log(`${storyTag(storyId)} Starting story generation for user ${userId}`);
 
     // Compute favoriteAnimal from specialFriend fields or use legacy value
     const favoriteAnimal = input.specialFriendName
@@ -108,12 +109,12 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
     });
 
     // Step 1: Generate story text with Gemini
-    console.log('Step 1: Generating story text...');
+    console.log(`${storyTag(storyId)} Step 1: Generating story text...`);
     const storyInput: StoryInput = { ...input, favoriteAnimal };
-    const story = await generateStory(storyInput);
+    const story = await generateStory(storyInput, storyId);
 
     // Step 2: Generate all illustrations (FC-013: per-character refs upfront; FC-012: title page)
-    console.log('Step 2: Generating illustrations...');
+    console.log(`${storyTag(storyId)} Step 2: Generating illustrations...`);
     const { pageUrls, characterReferenceUrls, titlePageImageUrl, castReferenceUrl } = await generateAllIllustrations(
       story,
       storyId,
@@ -123,7 +124,8 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
     );
 
     // Step 3: Save pages to Firestore
-    console.log('Step 3: Saving to Firestore...');
+    console.log(`${storyTag(storyId)} Step 3: Saving to Firestore...`);
+    const firestoreStart = Date.now();
     const batch = db.batch();
 
     story.pages.forEach((page, index) => {
@@ -162,9 +164,17 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
     });
 
     await batch.commit();
+    emitStageEvent({
+      storyId, stage: 'firestore_persist', latencyMs: Date.now() - firestoreStart,
+      pageCount: story.pages.length, outcome: 'success',
+    });
 
     const elapsed = Date.now() - startTime;
-    console.log(`Story ${storyId} completed in ${elapsed}ms`);
+    console.log(`${storyTag(storyId)} Story completed in ${elapsed}ms`);
+    emitStageEvent({
+      storyId, stage: 'total', latencyMs: elapsed,
+      pageCount: story.pages.length, outcome: 'success',
+    });
 
     // Return complete story
     res.json({
@@ -196,7 +206,12 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       generationTimeMs: elapsed,
     });
   } catch (error) {
-    console.error('Story generation failed:', error);
+    console.error(`${storyTag(storyId)} Story generation failed:`, error);
+    emitStageEvent({
+      storyId, stage: 'total', latencyMs: Date.now() - startTime,
+      outcome: 'failure',
+      detail: { message: error instanceof Error ? error.message : 'Unknown error' },
+    });
 
     res.status(500).json({
       error: 'Story generation failed',

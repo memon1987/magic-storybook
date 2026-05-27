@@ -31,6 +31,11 @@ import { buildStoryPrompt } from '../prompts/story';
 import { buildIllustrationPrompt } from '../prompts/illustration';
 import { buildCharacterReferencePrompt, buildCastReferencePrompt } from '../prompts/characterReference';
 import { buildTitlePagePrompt } from '../prompts/titlePage';
+import {
+  emitStageEvent,
+  instrumentedGenerateContent,
+  storyTag,
+} from './instrumentation';
 
 // Initialize Gemini client
 const ai = new GoogleGenAI({
@@ -107,39 +112,47 @@ function jitteredBackoffMs(attempt: number): number {
 
 /**
  * Generate a story using Gemini Pro
+ *
+ * `storyId` is optional so test callers can omit it; production callers
+ * (the route handler) pass it so the FC-016 / FC-017 instrumentation log
+ * events are traceable to a specific story.
  */
-export async function generateStory(input: StoryInput): Promise<GeneratedStory> {
+export async function generateStory(input: StoryInput, storyId: string = 'unknown'): Promise<GeneratedStory> {
   const prompt = buildStoryPrompt(input);
 
-  console.log('Generating story with Gemini Pro...');
+  console.log(`${storyTag(storyId)} Generating story with Gemini Pro...`);
   const startTime = Date.now();
 
   let response: Awaited<ReturnType<typeof ai.models.generateContent>> | null = null;
   let lastError: unknown = null;
+  let totalAttempts = 0;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    totalAttempts = attempt;
     try {
-      response = await ai.models.generateContent({
-        model: TEXT_MODEL,
-        contents: prompt,
-      });
+      response = await instrumentedGenerateContent(storyId, 'story_text', attempt, () =>
+        ai.models.generateContent({ model: TEXT_MODEL, contents: prompt }),
+      );
       break;
     } catch (error) {
       lastError = error;
       if (isRetryableError(error) && attempt < MAX_RETRIES) {
         const delayMs = jitteredBackoffMs(attempt);
-        console.log(`Story text: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
+        console.log(`${storyTag(storyId)} Story text: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
         await sleep(delayMs);
         continue;
       }
+      emitStageEvent({ storyId, stage: 'story_text', latencyMs: Date.now() - startTime, attempts: totalAttempts, outcome: 'failure' });
       throw error;
     }
   }
   if (!response) {
+    emitStageEvent({ storyId, stage: 'story_text', latencyMs: Date.now() - startTime, attempts: totalAttempts, outcome: 'failure' });
     throw lastError instanceof Error ? lastError : new Error('Story text generation failed');
   }
 
   const elapsed = Date.now() - startTime;
-  console.log(`Story generated in ${elapsed}ms`);
+  console.log(`${storyTag(storyId)} Story generated in ${elapsed}ms`);
+  emitStageEvent({ storyId, stage: 'story_text', latencyMs: elapsed, attempts: totalAttempts, outcome: 'success' });
 
   // Extract text from response
   let text = response.text || '';
@@ -381,15 +394,19 @@ export async function generateIllustration(
   // Returns raw bytes (not uploaded) so the verify loop can OCR before keeping.
   // Returns null only when all transient retries are exhausted (regenerating
   // for text quality won't help there, so the outer loop stops on null).
+  let totalCallAttempts = 0;
   const generateOnce = async (): Promise<{ imageData: string; mimeType: string } | null> => {
     let lastError: unknown = null;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      totalCallAttempts += 1;
       try {
-        const response = await ai.models.generateContent({
-          model: IMAGE_MODEL,
-          contents,
-          config: { responseModalities: ['IMAGE'] },
-        });
+        const response = await instrumentedGenerateContent(storyId, 'page', attempt, () =>
+          ai.models.generateContent({
+            model: IMAGE_MODEL,
+            contents,
+            config: { responseModalities: ['IMAGE'] },
+          }),
+        );
         console.log(`${tag} generated in ${Date.now() - startTime}ms (attempt ${attempt})`);
         const parts = response.candidates?.[0]?.content?.parts || [];
         let imageData: string | null = null;
@@ -448,10 +465,20 @@ export async function generateIllustration(
     const extension = best.mimeType.includes('jpeg') || best.mimeType.includes('jpg') ? 'jpg' : 'png';
     const filename = `stories/${storyId}/page-${pageNumber}-${uuid()}.${extension}`;
     const publicUrl = await uploadGeneratedImage(best.imageData, best.mimeType, filename);
+    emitStageEvent({
+      storyId, stage: 'page', latencyMs: Date.now() - startTime,
+      attempts: totalCallAttempts, outcome: 'success',
+      detail: { pageNumber, ocrPassed: bakedTextPasses(best.score), f1: best.f1 },
+    });
     return { publicUrl, imageBase64: best.imageData, mimeType: best.mimeType };
   }
 
   console.error(`${tag} generation failed — returning placeholder`);
+  emitStageEvent({
+    storyId, stage: 'page', latencyMs: Date.now() - startTime,
+    attempts: totalCallAttempts, outcome: 'failure',
+    detail: { pageNumber },
+  });
   return { publicUrl: `https://placehold.co/800x600/png?text=Page+${pageNumber}`, imageBase64: null, mimeType: 'image/png' };
 }
 
@@ -486,13 +513,17 @@ export async function generateCharacterReference(
   const safeNameSlug = character.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'character';
 
   let lastError: unknown = null;
+  let totalAttempts = 0;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    totalAttempts = attempt;
     try {
-      const response = await ai.models.generateContent({
-        model: IMAGE_MODEL,
-        contents,
-        config: { responseModalities: ['IMAGE'] },
-      });
+      const response = await instrumentedGenerateContent(storyId, 'char_ref', attempt, () =>
+        ai.models.generateContent({
+          model: IMAGE_MODEL,
+          contents,
+          config: { responseModalities: ['IMAGE'] },
+        }),
+      );
 
       const elapsed = Date.now() - startTime;
       console.log(`Character reference "${character.name}" generated in ${elapsed}ms (attempt ${attempt})`);
@@ -514,6 +545,11 @@ export async function generateCharacterReference(
       const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
       const filename = `stories/${storyId}/character-refs/${safeNameSlug}-${uuid()}.${extension}`;
       const publicUrl = await uploadGeneratedImage(imageData, mimeType, filename);
+      emitStageEvent({
+        storyId, stage: 'char_ref', latencyMs: elapsed,
+        attempts: totalAttempts, outcome: 'success',
+        detail: { name: character.name },
+      });
       return { name: character.name, publicUrl, imageBase64: imageData, mimeType };
     } catch (error) {
       lastError = error;
@@ -529,6 +565,11 @@ export async function generateCharacterReference(
   }
 
   console.error(`All ${MAX_RETRIES} attempts failed for character reference "${character.name}"; last error:`, lastError);
+  emitStageEvent({
+    storyId, stage: 'char_ref', latencyMs: Date.now() - startTime,
+    attempts: totalAttempts, outcome: 'failure',
+    detail: { name: character.name },
+  });
   return {
     name: character.name,
     publicUrl: `https://placehold.co/800x600/png?text=${encodeURIComponent(character.name)}`,
@@ -556,14 +597,19 @@ export async function generateCastReference(
   const startTime = Date.now();
 
   let lastError: unknown = null;
+  let totalAttempts = 0;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    totalAttempts = attempt;
     try {
-      const response = await ai.models.generateContent({
-        model: IMAGE_MODEL,
-        contents,
-        config: { responseModalities: ['IMAGE'] },
-      });
-      console.log(`Cast reference generated in ${Date.now() - startTime}ms (attempt ${attempt})`);
+      const response = await instrumentedGenerateContent(storyId, 'cast_ref', attempt, () =>
+        ai.models.generateContent({
+          model: IMAGE_MODEL,
+          contents,
+          config: { responseModalities: ['IMAGE'] },
+        }),
+      );
+      const elapsed = Date.now() - startTime;
+      console.log(`Cast reference generated in ${elapsed}ms (attempt ${attempt})`);
       const parts = response.candidates?.[0]?.content?.parts || [];
       let imageData: string | null = null;
       let mimeType = 'image/png';
@@ -580,6 +626,11 @@ export async function generateCastReference(
       const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
       const filename = `stories/${storyId}/character-refs/cast-${uuid()}.${extension}`;
       const publicUrl = await uploadGeneratedImage(imageData, mimeType, filename);
+      emitStageEvent({
+        storyId, stage: 'cast_ref', latencyMs: elapsed,
+        attempts: totalAttempts, outcome: 'success',
+        detail: { charCount: characters.length },
+      });
       return { name: '__cast__', publicUrl, imageBase64: imageData, mimeType };
     } catch (error) {
       lastError = error;
@@ -594,6 +645,11 @@ export async function generateCastReference(
     }
   }
   console.error(`All ${MAX_RETRIES} attempts failed for cast reference; last error:`, lastError);
+  emitStageEvent({
+    storyId, stage: 'cast_ref', latencyMs: Date.now() - startTime,
+    attempts: totalAttempts, outcome: 'failure',
+    detail: { charCount: characters.length },
+  });
   return { name: '__cast__', publicUrl: '', imageBase64: null, mimeType: 'image/png' };
 }
 
@@ -626,13 +682,17 @@ export async function generateTitlePage(
   const startTime = Date.now();
 
   let lastError: unknown = null;
+  let totalAttempts = 0;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    totalAttempts = attempt;
     try {
-      const response = await ai.models.generateContent({
-        model: IMAGE_MODEL,
-        contents,
-        config: { responseModalities: ['IMAGE'] },
-      });
+      const response = await instrumentedGenerateContent(storyId, 'title_page', attempt, () =>
+        ai.models.generateContent({
+          model: IMAGE_MODEL,
+          contents,
+          config: { responseModalities: ['IMAGE'] },
+        }),
+      );
 
       const elapsed = Date.now() - startTime;
       console.log(`Title page generated in ${elapsed}ms (attempt ${attempt})`);
@@ -653,7 +713,12 @@ export async function generateTitlePage(
 
       const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
       const filename = `stories/${storyId}/title-${uuid()}.${extension}`;
-      return await uploadGeneratedImage(imageData, mimeType, filename);
+      const publicUrl = await uploadGeneratedImage(imageData, mimeType, filename);
+      emitStageEvent({
+        storyId, stage: 'title_page', latencyMs: elapsed,
+        attempts: totalAttempts, outcome: 'success',
+      });
+      return publicUrl;
     } catch (error) {
       lastError = error;
       if (isRetryableError(error) && attempt < MAX_RETRIES) {
@@ -672,6 +737,10 @@ export async function generateTitlePage(
   // null lets the route persist no titlePageImageUrl and keep behavior parity
   // with pre-FC-012 stories.
   console.error(`All ${MAX_RETRIES} attempts failed for title page; last error:`, lastError);
+  emitStageEvent({
+    storyId, stage: 'title_page', latencyMs: Date.now() - startTime,
+    attempts: totalAttempts, outcome: 'failure',
+  });
   return null;
 }
 
@@ -743,11 +812,19 @@ export async function generateAllIllustrations(
 
   if (sheetsForRefs.length > 0) {
     console.log(
-      `Step 2a (FC-013): generating ${sheetsForRefs.length} character reference image(s) in parallel: ${sheetsForRefs.map((c) => c.name).join(', ')}...`,
+      `${storyTag(storyId)} Step 2a (FC-013): generating ${sheetsForRefs.length} character reference image(s) in parallel: ${sheetsForRefs.map((c) => c.name).join(', ')}...`,
     );
+    const charRefStart = Date.now();
     const refResults = await Promise.all(
       sheetsForRefs.map((c) => generateCharacterReference(c, storyId, style)),
     );
+    const successCount = refResults.filter((r) => r.imageBase64).length;
+    emitStageEvent({
+      storyId, stage: 'char_refs_total', latencyMs: Date.now() - charRefStart,
+      charCount: sheetsForRefs.length,
+      outcome: successCount === sheetsForRefs.length ? 'success' : (successCount > 0 ? 'partial' : 'failure'),
+      detail: { successCount, totalCount: sheetsForRefs.length },
+    });
     for (const result of refResults) {
       // FC-013 review fix H2: only persist + return refs that actually produced
       // image data. Failed refs degrade gracefully — page generations skip their
@@ -807,7 +884,8 @@ export async function generateAllIllustrations(
   const results = new Map<number, string>();
   const canonicalAnchors: ReferenceImage[] = [];
 
-  console.log(`Step 3a: generating ${seqPages.length} canonical-anchor page(s) sequentially...`);
+  console.log(`${storyTag(storyId)} Step 3a: generating ${seqPages.length} canonical-anchor page(s) sequentially...`);
+  const anchorPagesStart = Date.now();
   for (const page of seqPages) {
     const refs = [...baseRefs, ...canonicalAnchors];
     const r = await generateIllustration(
@@ -819,12 +897,19 @@ export async function generateAllIllustrations(
       canonicalAnchors.push({ type: 'prior_page', pageNumber: page.pageNumber, data: r.imageBase64, mimeType: r.mimeType });
     }
   }
+  if (seqPages.length > 0) {
+    emitStageEvent({
+      storyId, stage: 'anchor_pages_total', latencyMs: Date.now() - anchorPagesStart,
+      pageCount: seqPages.length, outcome: 'success',
+    });
+  }
 
   if (parPages.length > 0) {
     const refs = [...baseRefs, ...canonicalAnchors];
     console.log(
-      `Step 3b: generating pages ${parPages.map((p) => p.pageNumber).join(', ')} in parallel (concurrency ${PAGE_GEN_CONCURRENCY}) with ${refs.length} reference(s)...`,
+      `${storyTag(storyId)} Step 3b: generating pages ${parPages.map((p) => p.pageNumber).join(', ')} in parallel (concurrency ${PAGE_GEN_CONCURRENCY}) with ${refs.length} reference(s)...`,
     );
+    const parPagesStart = Date.now();
     const parResults = await mapWithConcurrency(parPages, PAGE_GEN_CONCURRENCY, (page) =>
       generateIllustration(
         page.sceneDescription, animalType, storyId, page.pageNumber, page.text, style,
@@ -832,15 +917,26 @@ export async function generateAllIllustrations(
       ),
     );
     parPages.forEach((page, i) => results.set(page.pageNumber, parResults[i].publicUrl));
+    emitStageEvent({
+      storyId, stage: 'parallel_pages_total', latencyMs: Date.now() - parPagesStart,
+      pageCount: parPages.length, outcome: 'success',
+      detail: { concurrency: PAGE_GEN_CONCURRENCY },
+    });
   }
 
   const pageUrls = sortedPages.map((page) => results.get(page.pageNumber)!);
 
   const elapsed = Date.now() - startTime;
   console.log(
-    `All ${story.pages.length} illustrations + ${Object.keys(characterReferenceUrls).length} char ref(s)` +
+    `${storyTag(storyId)} All ${story.pages.length} illustrations + ${Object.keys(characterReferenceUrls).length} char ref(s)` +
     `${castReferenceUrl ? ' + cast ref' : ''} generated in ${elapsed}ms`,
   );
+  emitStageEvent({
+    storyId, stage: 'all_illustrations', latencyMs: elapsed,
+    pageCount: story.pages.length, charCount: Object.keys(characterReferenceUrls).length,
+    outcome: 'success',
+    detail: { hasCastRef: castReferenceUrl !== null, hasTitlePage: titlePageImageUrl !== null },
+  });
 
   return { pageUrls, characterReferenceUrls, titlePageImageUrl, castReferenceUrl };
 }
