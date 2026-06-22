@@ -273,13 +273,32 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
+### FC-024: Stand up a mobile test runner (vitest / jest-expo)
+
+**Status:** Consideration
+**Size estimate:** M
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** The `mobile/` package has **zero** test infrastructure — no `test` script, no vitest/jest, no test files (verified 2026-06-22 during FC-022). Pure logic that's easy to get wrong currently ships verified only by manual walkthrough: e.g. FC-022's `readerPageLabel` page-counter helper (`components/PageCurl/paging.ts` — cover/end-page offset math), the `services/api.ts` auth-token interceptor, and `useAuth` state transitions. A runner would let us unit-test extracted pure helpers immediately and add component tests for the reader over time. (Backend already uses Vitest — see FC-020.)
+
+**Open questions:**
+- vitest (consistent with backend, fast) vs jest-expo (official Expo preset, better RN/Skia/Reanimated mocking out of the box)?
+- Unit-only to start, or also component tests via `@testing-library/react-native` given the Skia/Reanimated native deps that need mocking?
+- CI wiring: there is **no GitHub Actions workflow** in this repo yet (noted during FC-023). Stand one up to gate PRs on `tsc` + tests, or run locally only at first?
+- First targets once a runner exists: `readerPageLabel`, the `api.ts` interceptor, `useAuth` reducer logic.
+
+---
+
 ## Completed
 
-### FC-021: Reader orientation gate — stuck "rotate your device" overlay — Done 2026-06-22
+### FC-023: Reader orientation gate — stuck "rotate your device" overlay — Done 2026-06-22
+
+_(Originally filed as FC-021; renumbered to FC-023 to resolve a collision with the pre-existing "FC-021: GCP-side latency levers" consideration. PR #25 / git history still reference the old "FC-021" label.)_
 
 Fixed a reported bug where the story reader blocked rendering behind a full-screen "Stories read best in landscape" overlay that never dismissed on rotation. Root cause: `isPortrait` ORed the `expo-screen-orientation` enum with `height > width` and relied on `lockAsync(LANDSCAPE)` actually rotating the UI; when the lock silently no-ops (iPad multitasking, OS portrait rotation-lock, simulators) the window never flips, the orientation listener never fires a landscape event, and the gate can never clear — trapping the user with only a Close button. Fix: always render the reader (the page-curl `Curl` is dimension-driven), detect portrait purely from `useWindowDimensions` (`height > width`), drop the unreliable orientation state + listener, and replace the blocking overlay with a small non-blocking auto-dismissing "Best read in landscape" hint. Lock is best-effort and logs on failure. Considered + rejected `UIRequiresFullScreen` (disables iPad multitasking app-wide). Adversarial review → APPROVE, no code changes required.
 
-- **Plan:** [docs/plans/fc-021.md](plans/fc-021.md)
+- **Plan:** [docs/plans/fc-023.md](plans/fc-023.md)
 - **PR:** [#25](https://github.com/memon1987/ai-storybook-app/pull/25) (squash-merged as `9df56e7`)
 
 ### FC-020: Baked-in text + OCR text-repair; delete Skia overlay — Done 2026-05-24
