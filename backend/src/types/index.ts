@@ -80,6 +80,39 @@ export interface StoryPageWithImage extends StoryPage {
   imageUrl: string;
 }
 
+// FC-017 Phase 2: per-stage progress for live UX + resume.
+// `phase` advances monotonically through the pipeline; `completedSteps` is
+// scoped to the current phase (e.g. 3 of 6 char-refs done within 'char-refs').
+// `message` is backend-rendered user-facing copy so the mobile reader is a
+// dumb subscriber.
+export type GenerationPhase =
+  | 'story-text'
+  | 'char-refs'
+  | 'cast'
+  | 'title'
+  | 'anchor-pages'
+  | 'parallel-pages'
+  | 'finalizing';
+
+export interface GenerationProgress {
+  phase: GenerationPhase;
+  completedSteps: number;
+  totalSteps: number;
+  message: string;
+  updatedAt: FirebaseFirestore.Timestamp;
+}
+
+// FC-017 Phase 2: per-page tracking on the story doc. Lives alongside (not
+// instead of) the pages subcollection — the subcollection is the final
+// indexed form populated at story completion; this map is the *intermediate*
+// resume state: which page URLs have already been generated and uploaded, so
+// a resumed worker can skip them.
+export interface PageGenerationRecord {
+  url: string;
+  ocrPassed: boolean;
+  attempts: number;
+}
+
 // Story document in Firestore
 export interface StoryDocument {
   id: string;
@@ -96,7 +129,11 @@ export interface StoryDocument {
   writingStyle?: WritingStyleId;
   length: 'short' | 'medium' | 'long';
   artStyle: ArtStyle;
-  status: 'pending' | 'generating' | 'complete' | 'failed';
+
+  // FC-017 Phase 2: 'queued' is the initial state after the route accepts the
+  // request and before a worker has claimed the job. 'generating' is held by
+  // an active worker. 'complete' / 'failed' are terminal.
+  status: 'queued' | 'generating' | 'complete' | 'failed';
   pageCount?: number;
   characterReferenceUrls?: Record<string, string>;  // FC-013 (per-character model sheets)
   characterSheets?: CharacterVisualSheet[];         // FC-019/020: textual character identities
@@ -104,6 +141,23 @@ export interface StoryDocument {
   titlePage?: TitlePage;                            // FC-012
   titlePageImageUrl?: string;                       // FC-012 (Cloud Storage URL)
   castReferenceUrl?: string;                        // FC-020 (cast lineup ref; >1 character)
+
+  // FC-017 Phase 2 — the resume payload. Persisted incrementally as each
+  // phase boundary lands, so a crashed worker can be resumed by reading this
+  // doc and skipping what's already done. All optional because they fill in
+  // over the course of a run; absent fields mean "not yet generated".
+  storyText?: GeneratedStory;                       // populated after story-text phase
+  pageUrls?: Record<string, PageGenerationRecord>;  // key = pageNumber as string (Firestore keys must be strings)
+  progress?: GenerationProgress;                    // live progress for mobile snapshot subscription
+
+  // FC-017 Phase 2 worker-claim state. Single-writer invariant: a worker only
+  // proceeds if it can transactionally claim workerId and refresh
+  // workerHeartbeatAt. Stale heartbeat (> 90s) means the lock is up for grabs.
+  workerId?: string;
+  workerHeartbeatAt?: FirebaseFirestore.Timestamp;
+  attempt?: number;                                 // resume counter (1, 2, ...)
+  failureReason?: string;                           // populated on terminal failure
+
   createdAt: FirebaseFirestore.Timestamp;
 }
 

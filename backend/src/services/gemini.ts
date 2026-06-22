@@ -36,6 +36,13 @@ import {
   instrumentedGenerateContent,
   storyTag,
 } from './instrumentation';
+import {
+  JobState,
+  JobStateWriter,
+  emptyJobState,
+  progressMessage,
+} from './jobState';
+import { downloadRef } from './gcsDownload';
 
 // Initialize Gemini client
 const ai = new GoogleGenAI({
@@ -755,7 +762,21 @@ export interface AllIllustrationsResult {
 }
 
 /**
- * Generate all illustrations for a story (FC-020 pipeline).
+ * FC-017 Phase 2: no-op JobStateWriter for callers that don't want
+ * incremental Firestore writes (e.g. tests, the back-compat path).
+ * Production calls go through worker.ts with a FirestoreJobStateWriter.
+ */
+const noopWriter: JobStateWriter = {
+  async saveStoryText() { /* no-op */ },
+  async saveCharacterReference() { /* no-op */ },
+  async saveCastReference() { /* no-op */ },
+  async saveTitlePage() { /* no-op */ },
+  async savePage() { /* no-op */ },
+  async saveProgress() { /* no-op */ },
+};
+
+/**
+ * Generate all illustrations for a story (FC-020 pipeline; FC-017 Phase 2 resume-aware).
  *
  *   1. Character model-sheet refs — parallel (capped at MAX_CHARACTER_REFS images).
  *   2. Cast lineup (>1 character) + title page — parallel.
@@ -766,6 +787,14 @@ export interface AllIllustrationsResult {
  *
  * Stories with no named characters skip steps 1-2; pages still anchor on the
  * first rendered pages.
+ *
+ * FC-017 Phase 2: optional `opts.state` carries the resume payload (what
+ * artifacts are already done). Anything in state is SKIPPED on this run; for
+ * artifacts that downstream phases need as multimodal inputs (char-refs, cast,
+ * anchor pages), the bytes are re-downloaded from GCS. `opts.writer` receives
+ * per-artifact + per-progress updates so a crashed worker can be resumed by
+ * a future run reading the persisted state. When opts is omitted (e.g. tests),
+ * behavior is identical to the pre-Phase-2 path (no persistence, no skipping).
  */
 export async function generateAllIllustrations(
   story: GeneratedStory,
@@ -773,12 +802,18 @@ export async function generateAllIllustrations(
   animalType: string,
   style: ArtStyle = 'watercolor',
   childName?: string,
+  opts: { state?: JobState; writer?: JobStateWriter } = {},
 ): Promise<AllIllustrationsResult> {
+  const state: JobState = opts.state ?? emptyJobState(storyId);
+  const writer: JobStateWriter = opts.writer ?? noopWriter;
   const startTime = Date.now();
   const sortedPages = [...story.pages].sort((a, b) => a.pageNumber - b.pageNumber);
 
   // ----- Step 1 (FC-013): generate character references in parallel -----
-  const characterReferenceUrls: Record<string, string> = {};
+  // FC-017 Phase 2: pre-populate from state for any refs already persisted on a
+  // prior attempt. Bytes are re-downloaded from GCS so they remain available as
+  // multimodal inputs to downstream phases.
+  const characterReferenceUrls: Record<string, string> = { ...state.characterReferenceUrls };
   // Map of character name -> raw image bytes/mime, for use as multimodal refs in page calls.
   // Only populated for refs that succeeded with real image data (placeholder fallbacks are URL-only).
   const characterRefImages: ReferenceImage[] = [];
@@ -811,43 +846,82 @@ export async function generateAllIllustrations(
   }
 
   if (sheetsForRefs.length > 0) {
-    console.log(
-      `${storyTag(storyId)} Step 2a (FC-013): generating ${sheetsForRefs.length} character reference image(s) in parallel: ${sheetsForRefs.map((c) => c.name).join(', ')}...`,
-    );
-    const charRefStart = Date.now();
-    const refResults = await Promise.all(
-      sheetsForRefs.map((c) => generateCharacterReference(c, storyId, style)),
-    );
-    const successCount = refResults.filter((r) => r.imageBase64).length;
-    emitStageEvent({
-      storyId, stage: 'char_refs_total', latencyMs: Date.now() - charRefStart,
-      charCount: sheetsForRefs.length,
-      outcome: successCount === sheetsForRefs.length ? 'success' : (successCount > 0 ? 'partial' : 'failure'),
-      detail: { successCount, totalCount: sheetsForRefs.length },
-    });
-    for (const result of refResults) {
-      // FC-013 review fix H2: only persist + return refs that actually produced
-      // image data. Failed refs degrade gracefully — page generations skip their
-      // visual ref, characterSheets[] text description still applies, and we
-      // don't pollute Firestore (or any future "About the characters" UI) with
-      // placehold.co URLs for what is supposed to be the canonical character
-      // visual ID.
-      if (result.imageBase64) {
-        characterReferenceUrls[result.name] = result.publicUrl;
-        characterRefImages.push({
-          type: 'character',
-          name: result.name,
-          data: result.imageBase64,
-          mimeType: result.mimeType,
-        });
-      } else {
-        console.warn(
-          `Character reference for "${result.name}" failed to produce image data — omitting from characterReferenceUrls; page generations will skip its visual ref (text description still applies).`,
-        );
+    // FC-017 Phase 2: partition into already-done (rehydrate from GCS) vs todo (generate).
+    const todo: typeof sheetsForRefs = [];
+    const alreadyDone: typeof sheetsForRefs = [];
+    for (const c of sheetsForRefs) {
+      if (state.characterReferenceUrls[c.name]) alreadyDone.push(c);
+      else todo.push(c);
+    }
+    await writer.saveProgress('char-refs', 0, sheetsForRefs.length, progressMessage('char-refs', 0, sheetsForRefs.length));
+
+    if (alreadyDone.length > 0) {
+      console.log(
+        `${storyTag(storyId)} Step 2a (FC-013/FC-017 resume): re-downloading ${alreadyDone.length} prior char ref(s) from GCS: ${alreadyDone.map((c) => c.name).join(', ')}`,
+      );
+      const downloaded = await Promise.all(alreadyDone.map(async (c) => {
+        const url = state.characterReferenceUrls[c.name];
+        const bytes = await downloadRef(url);
+        return { name: c.name, bytes };
+      }));
+      for (const r of downloaded) {
+        if (r.bytes) {
+          characterRefImages.push({ type: 'character', name: r.name, data: r.bytes.data, mimeType: r.bytes.mimeType });
+        } else {
+          // GCS download failed for a previously-persisted ref. Don't regenerate
+          // — that would burn cost on a transient error. Page generation will
+          // proceed without this ref's visual (text description still applies).
+          console.warn(`Character ref "${r.name}" rehydrate failed — proceeding without its visual.`);
+        }
+      }
+    }
+
+    if (todo.length > 0) {
+      console.log(
+        `${storyTag(storyId)} Step 2a (FC-013): generating ${todo.length} character reference image(s) in parallel: ${todo.map((c) => c.name).join(', ')}...`,
+      );
+      const charRefStart = Date.now();
+      const refResults = await Promise.all(
+        todo.map((c) => generateCharacterReference(c, storyId, style)),
+      );
+      const successCount = refResults.filter((r) => r.imageBase64).length;
+      emitStageEvent({
+        storyId, stage: 'char_refs_total', latencyMs: Date.now() - charRefStart,
+        charCount: todo.length,
+        outcome: successCount === todo.length ? 'success' : (successCount > 0 ? 'partial' : 'failure'),
+        detail: { successCount, totalCount: todo.length, alreadyDoneCount: alreadyDone.length },
+      });
+      let doneCount = alreadyDone.length;
+      for (const result of refResults) {
+        // FC-013 review fix H2: only persist + return refs that actually produced
+        // image data. Failed refs degrade gracefully — page generations skip their
+        // visual ref, characterSheets[] text description still applies, and we
+        // don't pollute Firestore (or any future "About the characters" UI) with
+        // placehold.co URLs for what is supposed to be the canonical character
+        // visual ID.
+        if (result.imageBase64) {
+          characterReferenceUrls[result.name] = result.publicUrl;
+          characterRefImages.push({
+            type: 'character',
+            name: result.name,
+            data: result.imageBase64,
+            mimeType: result.mimeType,
+          });
+          // FC-017 Phase 2: persist this ref the moment it lands so a crash
+          // mid-batch only loses the not-yet-completed refs.
+          await writer.saveCharacterReference(result.name, result.publicUrl);
+          doneCount += 1;
+          await writer.saveProgress('char-refs', doneCount, sheetsForRefs.length,
+            progressMessage('char-refs', doneCount, sheetsForRefs.length, { charName: result.name }));
+        } else {
+          console.warn(
+            `Character reference for "${result.name}" failed to produce image data — omitting from characterReferenceUrls; page generations will skip its visual ref (text description still applies).`,
+          );
+        }
       }
     }
   } else {
-    console.log('Step 2a (FC-013): story has no named characters — skipping character reference stage');
+    console.log(`${storyTag(storyId)} Step 2a (FC-013): story has no named characters — skipping character reference stage`);
   }
 
   // ----- Step 2 (FC-012 + FC-020): cast lineup + title page, in parallel -----
@@ -855,22 +929,54 @@ export async function generateAllIllustrations(
   // The cast lineup (only when >1 character) pins relative scale and becomes a
   // fixed canonical reference on every page. Both failures are non-fatal: a null
   // title falls back to pages[0]; a failed cast just means pages run without it.
+  //
+  // FC-017 Phase 2: skip whichever is already in state. Cast bytes (used as a
+  // multimodal ref on every page) get rehydrated from GCS on skip; title bytes
+  // are never used downstream (cover-only) so no rehydrate needed.
   const needsCast = orderedSheets.length > 1;
-  console.log(
-    `Step 2b: generating ${needsCast ? 'cast lineup + ' : ''}title page in parallel with ${characterRefImages.length} character ref(s)...`,
-  );
-  const [castResult, titlePageImageUrl] = await Promise.all([
-    needsCast ? generateCastReference(orderedSheets, storyId, style) : Promise.resolve(null),
-    story.titlePage ? generateTitlePage(story.titlePage, storyId, style, characterRefImages) : Promise.resolve(null),
+  const castAlreadyDone = !!state.castReferenceUrl;
+  const titleAlreadyDone = !!state.titlePageImageUrl;
+  const castTodo = needsCast && !castAlreadyDone;
+  const titleTodo = !!story.titlePage && !titleAlreadyDone;
+
+  if (castTodo || titleTodo) {
+    console.log(
+      `${storyTag(storyId)} Step 2b: generating ${[castTodo && 'cast lineup', titleTodo && 'title page'].filter(Boolean).join(' + ')} in parallel with ${characterRefImages.length} character ref(s)...`,
+    );
+  }
+
+  const [castResult, generatedTitleUrl] = await Promise.all([
+    castTodo ? generateCastReference(orderedSheets, storyId, style) : Promise.resolve(null),
+    titleTodo ? generateTitlePage(story.titlePage!, storyId, style, characterRefImages) : Promise.resolve(null),
   ]);
 
-  let castReferenceUrl: string | null = null;
+  let castReferenceUrl: string | null = state.castReferenceUrl ?? null;
+  let titlePageImageUrl: string | null = state.titlePageImageUrl ?? null;
   const baseRefs: ReferenceImage[] = [...characterRefImages];
+
+  // Cast: either freshly generated or rehydrate from GCS on resume.
   if (castResult && castResult.imageBase64) {
     castReferenceUrl = castResult.publicUrl;
     baseRefs.push({ type: 'cast', data: castResult.imageBase64, mimeType: castResult.mimeType });
-  } else if (needsCast) {
-    console.warn('Cast lineup reference failed to produce image data — pages run without it.');
+    await writer.saveCastReference(castResult.publicUrl);
+  } else if (castTodo) {
+    console.warn(`${storyTag(storyId)} Cast lineup reference failed to produce image data — pages run without it.`);
+    await writer.saveCastReference(null);
+  } else if (castAlreadyDone) {
+    const bytes = await downloadRef(state.castReferenceUrl!);
+    if (bytes) baseRefs.push({ type: 'cast', data: bytes.data, mimeType: bytes.mimeType });
+    else console.warn(`${storyTag(storyId)} Cast ref rehydrate from GCS failed on resume — pages run without it.`);
+  }
+
+  // Title: persist if freshly generated. No bytes needed downstream.
+  if (generatedTitleUrl) {
+    titlePageImageUrl = generatedTitleUrl;
+    await writer.saveTitlePage(generatedTitleUrl);
+  } else if (titleTodo) {
+    // Generation attempted and returned null (failure). FC-012 behavior: don't
+    // persist a placeholder — library falls back to pages[0]. Record the
+    // failure so a resume doesn't keep retrying.
+    await writer.saveTitlePage(null);
   }
 
   // ----- Step 3 (FC-020): pages with pin-first-K canonical anchoring ---------
@@ -880,13 +986,41 @@ export async function generateAllIllustrations(
   // anchors — no inter-page dependency, so a late page's drift can't propagate
   // and the batch parallelizes safely. Text is baked + OCR-verified inside
   // generateIllustration.
+  //
+  // FC-017 Phase 2: pages already in state.pageUrls are SKIPPED. Anchor pages
+  // skipped on resume get their bytes re-downloaded from GCS so the parallel
+  // batch can still reference them.
   const { sequential: seqPages, parallel: parPages } = splitForAnchoring(sortedPages, CANONICAL_ANCHOR_PAGES);
   const results = new Map<number, string>();
   const canonicalAnchors: ReferenceImage[] = [];
 
-  console.log(`${storyTag(storyId)} Step 3a: generating ${seqPages.length} canonical-anchor page(s) sequentially...`);
+  // Pre-load already-done page URLs from state.
+  for (const page of sortedPages) {
+    const prior = state.pageUrls[String(page.pageNumber)];
+    if (prior) results.set(page.pageNumber, prior.url);
+  }
+
+  await writer.saveProgress('anchor-pages', 0, seqPages.length, progressMessage('anchor-pages', 0, seqPages.length));
+  console.log(`${storyTag(storyId)} Step 3a: ${seqPages.length} canonical-anchor page(s) sequential...`);
   const anchorPagesStart = Date.now();
+  let anchorCompletedCount = 0;
   for (const page of seqPages) {
+    const priorAnchor = state.pageUrls[String(page.pageNumber)];
+    if (priorAnchor) {
+      // Skipped on resume. Rehydrate bytes from GCS so later pages can anchor on it.
+      if (canonicalAnchors.length < CANONICAL_ANCHOR_PAGES) {
+        const bytes = await downloadRef(priorAnchor.url);
+        if (bytes) {
+          canonicalAnchors.push({ type: 'prior_page', pageNumber: page.pageNumber, data: bytes.data, mimeType: bytes.mimeType });
+        } else {
+          console.warn(`${storyTag(storyId)} Anchor page ${page.pageNumber} rehydrate from GCS failed — downstream pages may drift.`);
+        }
+      }
+      anchorCompletedCount += 1;
+      await writer.saveProgress('anchor-pages', anchorCompletedCount, seqPages.length,
+        progressMessage('anchor-pages', anchorCompletedCount, seqPages.length, { pageNumber: page.pageNumber }));
+      continue;
+    }
     const refs = [...baseRefs, ...canonicalAnchors];
     const r = await generateIllustration(
       page.sceneDescription, animalType, storyId, page.pageNumber, page.text, style,
@@ -896,6 +1030,14 @@ export async function generateAllIllustrations(
     if (r.imageBase64 && canonicalAnchors.length < CANONICAL_ANCHOR_PAGES) {
       canonicalAnchors.push({ type: 'prior_page', pageNumber: page.pageNumber, data: r.imageBase64, mimeType: r.mimeType });
     }
+    await writer.savePage(page.pageNumber, {
+      url: r.publicUrl,
+      ocrPassed: r.imageBase64 !== null,
+      attempts: 1,
+    });
+    anchorCompletedCount += 1;
+    await writer.saveProgress('anchor-pages', anchorCompletedCount, seqPages.length,
+      progressMessage('anchor-pages', anchorCompletedCount, seqPages.length, { pageNumber: page.pageNumber }));
   }
   if (seqPages.length > 0) {
     emitStageEvent({
@@ -905,26 +1047,49 @@ export async function generateAllIllustrations(
   }
 
   if (parPages.length > 0) {
-    const refs = [...baseRefs, ...canonicalAnchors];
-    console.log(
-      `${storyTag(storyId)} Step 3b: generating pages ${parPages.map((p) => p.pageNumber).join(', ')} in parallel (concurrency ${PAGE_GEN_CONCURRENCY}) with ${refs.length} reference(s)...`,
-    );
-    const parPagesStart = Date.now();
-    const parResults = await mapWithConcurrency(parPages, PAGE_GEN_CONCURRENCY, (page) =>
-      generateIllustration(
-        page.sceneDescription, animalType, storyId, page.pageNumber, page.text, style,
-        story.characterSheets, story.settingIdentity, refs, page.soundEffects, page.emphasizedWords,
-      ),
-    );
-    parPages.forEach((page, i) => results.set(page.pageNumber, parResults[i].publicUrl));
-    emitStageEvent({
-      storyId, stage: 'parallel_pages_total', latencyMs: Date.now() - parPagesStart,
-      pageCount: parPages.length, outcome: 'success',
-      detail: { concurrency: PAGE_GEN_CONCURRENCY },
-    });
+    const todoParPages = parPages.filter((p) => !state.pageUrls[String(p.pageNumber)]);
+    await writer.saveProgress('parallel-pages', parPages.length - todoParPages.length, parPages.length,
+      progressMessage('parallel-pages', parPages.length - todoParPages.length, parPages.length));
+
+    if (todoParPages.length > 0) {
+      const refs = [...baseRefs, ...canonicalAnchors];
+      console.log(
+        `${storyTag(storyId)} Step 3b: ${todoParPages.length} parallel page(s) ${todoParPages.map((p) => p.pageNumber).join(', ')} (concurrency ${PAGE_GEN_CONCURRENCY}, ${refs.length} ref(s); ${parPages.length - todoParPages.length} already done from prior attempt)`,
+      );
+      const parPagesStart = Date.now();
+      const parResults = await mapWithConcurrency(todoParPages, PAGE_GEN_CONCURRENCY, async (page) => {
+        const r = await generateIllustration(
+          page.sceneDescription, animalType, storyId, page.pageNumber, page.text, style,
+          story.characterSheets, story.settingIdentity, refs, page.soundEffects, page.emphasizedWords,
+        );
+        // FC-017 Phase 2: per-page persistence the moment it lands so a crash
+        // mid-batch only loses the not-yet-completed pages, not the whole batch.
+        await writer.savePage(page.pageNumber, {
+          url: r.publicUrl,
+          ocrPassed: r.imageBase64 !== null,
+          attempts: 1,
+        });
+        return r;
+      });
+      todoParPages.forEach((page, i) => results.set(page.pageNumber, parResults[i].publicUrl));
+      emitStageEvent({
+        storyId, stage: 'parallel_pages_total', latencyMs: Date.now() - parPagesStart,
+        pageCount: todoParPages.length, outcome: 'success',
+        detail: { concurrency: PAGE_GEN_CONCURRENCY, alreadyDoneCount: parPages.length - todoParPages.length },
+      });
+    }
   }
 
   const pageUrls = sortedPages.map((page) => results.get(page.pageNumber)!);
+
+  // FC-017 Phase 2: release in-process ref bytes now that all page generation
+  // is complete. Bytes are still on the heap until the next GC, but clearing
+  // the references makes them eligible. Cosmetic on a single run; matters
+  // more for any future architecture where the worker holds state across
+  // multiple stories on one instance.
+  characterRefImages.length = 0;
+  baseRefs.length = 0;
+  canonicalAnchors.length = 0;
 
   const elapsed = Date.now() - startTime;
   console.log(

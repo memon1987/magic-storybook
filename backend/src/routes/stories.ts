@@ -3,15 +3,13 @@ import { Firestore, FieldValue } from '@google-cloud/firestore';
 import { v4 as uuid } from 'uuid';
 import { authMiddleware } from '../middleware/auth';
 import { WRITING_STYLE_IDS } from '../prompts/story';
-import {
-  generateStory,
-  generateAllIllustrations,
-} from '../services/gemini';
-import { emitStageEvent, storyTag } from '../services/instrumentation';
+import { runStoryWorker, LockHeldError, StoryNotResumableError } from '../services/worker';
+import { storyTag } from '../services/instrumentation';
 import {
   AuthRequest,
   StoryInput,
   ArtStyle,
+  StoryDocument,
 } from '../types';
 
 const router = Router();
@@ -79,10 +77,8 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
   }
 
   const storyId = uuid();
-  const startTime = Date.now();
   try {
     const storyRef = db.collection('stories').doc(storyId);
-
     console.log(`${storyTag(storyId)} Starting story generation for user ${userId}`);
 
     // Compute favoriteAnimal from specialFriend fields or use legacy value
@@ -90,10 +86,14 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       ? `${input.specialFriendDescription} named ${input.specialFriendName}`
       : input.favoriteAnimal || '';
 
-    // Create initial story record with 'generating' status
+    // FC-017 Phase 2: write the initial doc with status='queued' + all inputs,
+    // then delegate to runStoryWorker which handles the lock claim, the
+    // generation pipeline with per-phase Firestore writes, and the terminal
+    // status update. Same synchronous contract as before — Phase 3 will make
+    // this 202-ACK + background.
     await storyRef.set({
       userId,
-      status: 'generating',
+      status: 'queued',
       childName: input.childName,
       childGender: input.childGender || null,
       favoriteAnimal,
@@ -105,76 +105,11 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       writingStyle: input.writingStyle || null,
       length: input.length,
       artStyle,
+      attempt: 0,
       createdAt: FieldValue.serverTimestamp(),
     });
 
-    // Step 1: Generate story text with Gemini
-    console.log(`${storyTag(storyId)} Step 1: Generating story text...`);
-    const storyInput: StoryInput = { ...input, favoriteAnimal };
-    const story = await generateStory(storyInput, storyId);
-
-    // Step 2: Generate all illustrations (FC-013: per-character refs upfront; FC-012: title page)
-    console.log(`${storyTag(storyId)} Step 2: Generating illustrations...`);
-    const { pageUrls, characterReferenceUrls, titlePageImageUrl, castReferenceUrl } = await generateAllIllustrations(
-      story,
-      storyId,
-      favoriteAnimal,
-      artStyle,
-      input.childName,
-    );
-
-    // Step 3: Save pages to Firestore
-    console.log(`${storyTag(storyId)} Step 3: Saving to Firestore...`);
-    const firestoreStart = Date.now();
-    const batch = db.batch();
-
-    story.pages.forEach((page, index) => {
-      const pageRef = storyRef.collection('pages').doc();
-      // FC-020: persist the baked-text guidance fields when present (the FC-015
-      // textPosition was removed with the Skia overlay). Conditional spreads keep
-      // absent fields out of Firestore (writing undefined is rejected).
-      batch.set(pageRef, {
-        pageNumber: page.pageNumber,
-        text: page.text,
-        sceneDescription: page.sceneDescription,
-        imageUrl: pageUrls[index],
-        ...(page.soundEffects && page.soundEffects.length > 0 ? { soundEffects: page.soundEffects } : {}),
-        ...(page.emphasizedWords && page.emphasizedWords.length > 0 ? { emphasizedWords: page.emphasizedWords } : {}),
-      });
-    });
-
-    // Update story status to 'complete'
-    batch.update(storyRef, {
-      title: story.title,
-      status: 'complete',
-      pageCount: story.pages.length,
-      characterReferenceUrls, // FC-013: persist character ref URLs (empty object when not used)
-      // FC-013/FC-020: persist the textual character sheets + setting identity
-      // (not just the rendered ref URLs) — they anchor character/setting prompts
-      // and would be useful for any future regeneration. Costs ~1-2 KB / story.
-      ...(story.characterSheets && story.characterSheets.length > 0
-        ? { characterSheets: story.characterSheets }
-        : {}),
-      ...(story.settingIdentity && story.settingIdentity.name
-        ? { settingIdentity: story.settingIdentity }
-        : {}),
-      ...(story.titlePage ? { titlePage: story.titlePage } : {}),                      // FC-012
-      ...(titlePageImageUrl ? { titlePageImageUrl } : {}),                              // FC-012
-      ...(castReferenceUrl ? { castReferenceUrl } : {}),                                // FC-020
-    });
-
-    await batch.commit();
-    emitStageEvent({
-      storyId, stage: 'firestore_persist', latencyMs: Date.now() - firestoreStart,
-      pageCount: story.pages.length, outcome: 'success',
-    });
-
-    const elapsed = Date.now() - startTime;
-    console.log(`${storyTag(storyId)} Story completed in ${elapsed}ms`);
-    emitStageEvent({
-      storyId, stage: 'total', latencyMs: elapsed,
-      pageCount: story.pages.length, outcome: 'success',
-    });
+    const { story, illustrations, elapsedMs } = await runStoryWorker(storyId);
 
     // Return complete story
     res.json({
@@ -191,30 +126,97 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       writingStyle: input.writingStyle || null,
       artStyle,
       pageCount: story.pages.length,
-      characterReferenceUrls, // FC-013
-      titlePage: story.titlePage || null,            // FC-012
-      titlePageImageUrl: titlePageImageUrl || null,  // FC-012
+      characterReferenceUrls: illustrations.characterReferenceUrls,
+      titlePage: story.titlePage || null,
+      titlePageImageUrl: illustrations.titlePageImageUrl || null,
       pages: story.pages.map((page, index) => ({
         pageNumber: page.pageNumber,
         text: page.text,
-        imageUrl: pageUrls[index],
-        // FC-020: text is baked into the image; these remain for parity with the
-        // stored fields (the reader no longer renders an overlay from them).
+        imageUrl: illustrations.pageUrls[index],
         soundEffects: page.soundEffects ?? null,
         emphasizedWords: page.emphasizedWords ?? null,
       })),
-      generationTimeMs: elapsed,
+      generationTimeMs: elapsedMs,
     });
   } catch (error) {
     console.error(`${storyTag(storyId)} Story generation failed:`, error);
-    emitStageEvent({
-      storyId, stage: 'total', latencyMs: Date.now() - startTime,
-      outcome: 'failure',
-      detail: { message: error instanceof Error ? error.message : 'Unknown error' },
-    });
-
     res.status(500).json({
       error: 'Story generation failed',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * POST /api/stories/:id/resume
+ *
+ * FC-017 Phase 2: re-fire the worker against an existing story doc whose
+ * prior run died mid-flight or was marked failed. Auth + ownership are
+ * enforced via the existing middleware + a userId check. Lock contention
+ * (LockHeldError) → 409. Terminal-state issues (StoryNotResumableError) → 410.
+ * Resumes use whatever artifacts the prior run persisted to Firestore and
+ * skip them — only missing artifacts get regenerated. See docs/plans/fc-017.md.
+ */
+router.post('/:id/resume', async (req: AuthRequest, res: Response) => {
+  const id = req.params.id as string;
+  const userId = req.user!.uid;
+
+  try {
+    const storyDoc = await db.collection('stories').doc(id).get();
+    if (!storyDoc.exists) {
+      res.status(404).json({ error: 'Story not found' });
+      return;
+    }
+    const data = storyDoc.data() as Partial<StoryDocument>;
+    if (data.userId !== userId) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
+    console.log(`${storyTag(id)} Resume requested by user ${userId} (current status: ${data.status})`);
+    const { story, illustrations, elapsedMs } = await runStoryWorker(id);
+
+    res.json({
+      id,
+      title: story.title,
+      childName: data.childName,
+      childGender: data.childGender ?? null,
+      favoriteAnimal: data.favoriteAnimal,
+      specialFriendName: data.specialFriendName ?? null,
+      specialFriendDescription: data.specialFriendDescription ?? null,
+      setting: data.setting,
+      moral: data.moral,
+      authorStyle: data.authorStyle ?? null,
+      writingStyle: data.writingStyle ?? null,
+      artStyle: data.artStyle,
+      pageCount: story.pages.length,
+      characterReferenceUrls: illustrations.characterReferenceUrls,
+      titlePage: story.titlePage || null,
+      titlePageImageUrl: illustrations.titlePageImageUrl || null,
+      pages: story.pages.map((page, index) => ({
+        pageNumber: page.pageNumber,
+        text: page.text,
+        imageUrl: illustrations.pageUrls[index],
+        soundEffects: page.soundEffects ?? null,
+        emphasizedWords: page.emphasizedWords ?? null,
+      })),
+      generationTimeMs: elapsedMs,
+      resumed: true,
+    });
+  } catch (error) {
+    if (error instanceof LockHeldError) {
+      console.warn(`${storyTag(id)} Resume conflict: ${error.message}`);
+      res.status(409).json({ error: 'Story is already being generated', message: error.message });
+      return;
+    }
+    if (error instanceof StoryNotResumableError) {
+      console.warn(`${storyTag(id)} Resume rejected: ${error.message}`);
+      res.status(410).json({ error: 'Story cannot be resumed', message: error.message });
+      return;
+    }
+    console.error(`${storyTag(id)} Resume failed:`, error);
+    res.status(500).json({
+      error: 'Resume failed',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }
