@@ -39,6 +39,21 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ## Active Considerations
 
+### FC-021: Reader orientation gate — stuck "rotate your device" overlay
+
+**Status:** Plan published
+**Size estimate:** S
+**Owner:** Zeshan
+**Plan file:** `docs/plans/fc-021.md`
+
+**Problem / opportunity:** The story reader (`mobile/app/story/[id]/read.tsx`) blocks rendering behind a full-screen "Stories read best in landscape" overlay until it detects landscape. The detection ORs the `expo-screen-orientation` enum with a `height > width` fallback, and the reader relies on `lockAsync(LANDSCAPE)` having actually rotated the UI. When the lock silently no-ops (iPad multitasking, device rotation-lock, simulators) the window never flips, the orientation listener never fires a landscape event, and the overlay can never clear — rotating the device does nothing. The user is trapped with only a "Close" escape. (Retro FC — bug fixed before the entry was filed; this documents the fix.)
+
+**Open questions (resolved in plan):**
+- Block-until-landscape vs. always-render? → always render; the `Curl` is dimension-driven.
+- Force landscape reliably on iPad via `UIRequiresFullScreen`? → no; not worth disabling app-wide multitasking for one screen.
+
+---
+
 ### FC-003: Text-to-speech narration
 
 **Status:** Consideration
