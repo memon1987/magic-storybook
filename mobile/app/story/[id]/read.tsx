@@ -25,6 +25,7 @@ import { AnimatedPressable } from '../../../components/AnimatedPressable';
 import { SplashScreenAnimated } from '../../../components/SplashScreenAnimated';
 import { Curl, type TapZone } from '../../../components/PageCurl/Curl';
 import { usePageImages } from '../../../components/PageCurl/usePageImages';
+import { readerPageLabel } from '../../../components/PageCurl/paging';
 
 const CONTROLS_TIMEOUT_MS = 4000;
 
@@ -49,24 +50,33 @@ export default function ReadScreen() {
     enabled: !!id,
   });
 
-  // FC-012: prepend the cover (title page) as page 0 when present. Older
-  // stories without titlePageImageUrl render unchanged. We synthesize a
-  // StoryPage so the existing render iteration / dot indicator / page-curl
-  // logic doesn't need to learn about a separate cover concept.
+  // FC-012: prepend the cover (title page) as page 0 when present. FC-022:
+  // append a synthetic "The End" page after the last content page. Older
+  // stories without titlePageImageUrl render unchanged. We synthesize these as
+  // StoryPages so the existing render iteration / dot indicator / page-curl
+  // logic doesn't need to learn about separate cover/end concepts — the end
+  // page just carries no image (Curl paints it solid black).
   const hasCover = !!story?.titlePageImageUrl;
+  const hasEndPage = (story?.pages?.length ?? 0) > 0;
   const pages: StoryPage[] = useMemo(() => {
     const contentPages = story?.pages ?? [];
-    if (story?.titlePageImageUrl) {
-      const coverPage: StoryPage = {
-        pageNumber: 0,
-        text: story.titlePage?.text ?? story.title ?? '',
-        imageUrl: story.titlePageImageUrl,
-      };
-      return [coverPage, ...contentPages];
-    }
-    return contentPages;
+    const base: StoryPage[] = story?.titlePageImageUrl
+      ? [
+          {
+            pageNumber: 0,
+            text: story.titlePage?.text ?? story.title ?? '',
+            imageUrl: story.titlePageImageUrl,
+          },
+          ...contentPages,
+        ]
+      : contentPages;
+    if (contentPages.length === 0) return base;
+    const endPage: StoryPage = { pageNumber: -1, text: '', imageUrl: '' };
+    return [...base, endPage];
   }, [story?.titlePageImageUrl, story?.titlePage?.text, story?.title, story?.pages]);
-  const isLastPage = pages.length > 0 && currentPage === pages.length - 1;
+  // FC-022: the ending is a distinct page the user turns to — not an overlay on
+  // the last story page (which made that page unreadable).
+  const isEndPage = hasEndPage && currentPage === pages.length - 1;
   // Pure layout signal — always reflects the actually-rendered orientation,
   // independent of whether the OS honored the landscape lock.
   const isPortrait = height > width;
@@ -101,11 +111,11 @@ export default function ReadScreen() {
   }, [controlsVisible, currentPage]);
 
   useEffect(() => {
-    if (isLastPage && confettiFiredFor.current !== currentPage) {
+    if (isEndPage && confettiFiredFor.current !== currentPage) {
       confettiFiredFor.current = currentPage;
       confettiRef.current?.start();
     }
-  }, [isLastPage, currentPage]);
+  }, [isEndPage, currentPage]);
 
   const goToPage = (index: number) => {
     if (index < 0 || index >= pages.length) return;
@@ -213,9 +223,12 @@ export default function ReadScreen() {
             ))}
           </View>
           <Text style={styles.pageCounter}>
-            {hasCover && currentPage === 0
-              ? 'Cover'
-              : `${currentPage + (hasCover ? 0 : 1)} / ${pages.length - (hasCover ? 1 : 0)}`}
+            {readerPageLabel({
+              index: currentPage,
+              pageCount: pages.length,
+              hasCover,
+              hasEndPage,
+            })}
           </Text>
         </Animated.View>
       )}
@@ -232,7 +245,7 @@ export default function ReadScreen() {
         fallSpeed={2800}
       />
 
-      {isLastPage && (
+      {isEndPage && (
         <Animated.View
           entering={FadeIn.delay(600).duration(400)}
           style={styles.endOverlay}
@@ -344,10 +357,11 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.85)',
   },
   endOverlay: {
+    // FC-022: the end page itself is solid black (no image), so no scrim is
+    // needed — the card sits on the clean black page.
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.6)',
   },
   endCard: {
     width: '70%',
