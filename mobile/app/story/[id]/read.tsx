@@ -36,7 +36,9 @@ export default function ReadScreen() {
 
   const [currentPage, setCurrentPage] = useState(0);
   const [controlsVisible, setControlsVisible] = useState(true);
-  const [orientation, setOrientation] = useState<ScreenOrientation.Orientation | null>(null);
+  // Brief, non-blocking "best in landscape" hint that auto-dismisses. Unlike the
+  // old blocking overlay, this never traps the reader if the landscape lock fails.
+  const [hintVisible, setHintVisible] = useState(true);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const confettiFiredFor = useRef<number | null>(null);
   const confettiRef = useRef<ConfettiCannon | null>(null);
@@ -65,33 +67,28 @@ export default function ReadScreen() {
     return contentPages;
   }, [story?.titlePageImageUrl, story?.titlePage?.text, story?.title, story?.pages]);
   const isLastPage = pages.length > 0 && currentPage === pages.length - 1;
-  const isPortrait = orientation === ScreenOrientation.Orientation.PORTRAIT_UP
-    || orientation === ScreenOrientation.Orientation.PORTRAIT_DOWN
-    || height > width;
+  // Pure layout signal — always reflects the actually-rendered orientation,
+  // independent of whether the OS honored the landscape lock.
+  const isPortrait = height > width;
 
   const pageImages = usePageImages(pages, currentPage);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
-      } catch {
-        // some devices/simulators reject the lock
-      }
-      const initial = await ScreenOrientation.getOrientationAsync();
-      if (!cancelled) setOrientation(initial);
-    })();
-
-    const sub = ScreenOrientation.addOrientationChangeListener((evt) => {
-      setOrientation(evt.orientationInfo.orientation);
+    // Best-effort: force landscape. The lock can be rejected (iPad multitasking,
+    // simulators, device rotation-lock). We don't gate rendering on it — the
+    // reader is fully dimension-driven and renders fine either way.
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE).catch((e) => {
+      console.warn('Reader: failed to lock to landscape', e);
     });
-
     return () => {
-      cancelled = true;
-      ScreenOrientation.removeOrientationChangeListener(sub);
       ScreenOrientation.unlockAsync().catch(() => {});
     };
+  }, []);
+
+  // Auto-dismiss the landscape hint shortly after open.
+  useEffect(() => {
+    const t = setTimeout(() => setHintVisible(false), 3500);
+    return () => clearTimeout(t);
   }, []);
 
   useEffect(() => {
@@ -154,22 +151,6 @@ export default function ReadScreen() {
     );
   }
 
-  if (isPortrait) {
-    return (
-      <View style={styles.portraitOverlay}>
-        <Ionicons name="phone-landscape" size={64} color="#FFFFFF" />
-        <Text style={styles.portraitTitle}>Rotate your device</Text>
-        <Text style={styles.portraitSubtitle}>
-          Stories read best in landscape mode.
-        </Text>
-        <Pressable onPress={() => router.back()} style={styles.portraitCloseButton}>
-          <Ionicons name="close" size={20} color="#FFFFFF" />
-          <Text style={styles.portraitCloseText}>Close</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
   return (
     <View style={styles.container}>
       {/* FC-020: narration is baked into each illustration; Curl just renders + curls images. */}
@@ -183,6 +164,18 @@ export default function ReadScreen() {
         onPageChange={handlePageChange}
         onTap={handleTap}
       />
+
+      {isPortrait && hintVisible && (
+        <Animated.View
+          entering={FadeIn.duration(200)}
+          exiting={FadeOut.duration(200)}
+          style={styles.landscapeHint}
+          pointerEvents="none"
+        >
+          <Ionicons name="phone-landscape" size={18} color="#FFFFFF" />
+          <Text style={styles.landscapeHintText}>Best read in landscape</Text>
+        </Animated.View>
+      )}
 
       {controlsVisible && (
         <Animated.View
@@ -412,40 +405,21 @@ const styles = StyleSheet.create({
     fontFamily: 'Nunito_700Bold',
     fontSize: 15,
   },
-  portraitOverlay: {
-    flex: 1,
-    backgroundColor: '#000000',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 32,
-    gap: 12,
-  },
-  portraitTitle: {
-    fontFamily: 'Baloo2_700Bold',
-    fontSize: 22,
-    color: '#FFFFFF',
-    marginTop: 8,
-  },
-  portraitSubtitle: {
-    fontFamily: 'Quicksand_500Medium',
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.7)',
-    textAlign: 'center',
-  },
-  portraitCloseButton: {
+  landscapeHint: {
+    position: 'absolute',
+    top: 16,
+    alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingHorizontal: 18,
-    height: 44,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
-    marginTop: 16,
+    backgroundColor: 'rgba(0,0,0,0.65)',
   },
-  portraitCloseText: {
+  landscapeHintText: {
     fontFamily: 'Nunito_600SemiBold',
-    fontSize: 14,
+    fontSize: 13,
     color: '#FFFFFF',
   },
 });
