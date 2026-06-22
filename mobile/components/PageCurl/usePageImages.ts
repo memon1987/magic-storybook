@@ -8,12 +8,14 @@ export interface LoadedPages {
 }
 
 export function usePageImages(pages: StoryPage[], currentIndex: number): LoadedPages {
+  // `|| null` (not `?? null`) so an empty imageUrl — e.g. the FC-022 synthetic
+  // "The End" page, or any malformed page — never reaches Skia's useImage('').
   const prevUrl =
-    currentIndex > 0 && pages[currentIndex - 1] ? pages[currentIndex - 1].imageUrl : null;
-  const currentUrl = pages[currentIndex]?.imageUrl ?? null;
+    currentIndex > 0 && pages[currentIndex - 1] ? pages[currentIndex - 1].imageUrl || null : null;
+  const currentUrl = pages[currentIndex]?.imageUrl || null;
   const nextUrl =
     currentIndex < pages.length - 1 && pages[currentIndex + 1]
-      ? pages[currentIndex + 1].imageUrl
+      ? pages[currentIndex + 1].imageUrl || null
       : null;
 
   const prev = useImage(prevUrl);

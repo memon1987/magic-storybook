@@ -39,6 +39,20 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ## Active Considerations
 
+### FC-022: Reader "The End" — move end card off the last story page
+
+**Status:** Plan published
+**Size estimate:** S
+**Owner:** Zeshan
+**Plan file:** `docs/plans/fc-022.md`
+
+**Problem / opportunity:** The story reader (`mobile/app/story/[id]/read.tsx`) renders the "The End" card as a full-screen scrim the instant the user reaches the last page (`isLastPage`), covering the final story page and making it unreadable. The ending should be a distinct beat, not an overlay on the last page.
+
+**Open questions (resolved in plan):**
+- Dedicated "The End" page vs. trigger card on over-scroll past the last page? → dedicated synthetic end page, mirroring the existing synthesized cover (page 0). The Curl only emits forward-commit events, so an over-scroll trigger would require inventing a new gesture event and is undiscoverable; a real page the user turns to is clean and reuses existing machinery.
+
+---
+
 ### FC-003: Text-to-speech narration
 
 **Status:** Consideration
