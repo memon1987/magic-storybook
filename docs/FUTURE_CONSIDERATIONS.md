@@ -39,21 +39,6 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ## Active Considerations
 
-### FC-021: Reader orientation gate — stuck "rotate your device" overlay
-
-**Status:** Plan published
-**Size estimate:** S
-**Owner:** Zeshan
-**Plan file:** `docs/plans/fc-021.md`
-
-**Problem / opportunity:** The story reader (`mobile/app/story/[id]/read.tsx`) blocks rendering behind a full-screen "Stories read best in landscape" overlay until it detects landscape. The detection ORs the `expo-screen-orientation` enum with a `height > width` fallback, and the reader relies on `lockAsync(LANDSCAPE)` having actually rotated the UI. When the lock silently no-ops (iPad multitasking, device rotation-lock, simulators) the window never flips, the orientation listener never fires a landscape event, and the overlay can never clear — rotating the device does nothing. The user is trapped with only a "Close" escape. (Retro FC — bug fixed before the entry was filed; this documents the fix.)
-
-**Open questions (resolved in plan):**
-- Block-until-landscape vs. always-render? → always render; the `Curl` is dimension-driven.
-- Force landscape reliably on iPad via `UIRequiresFullScreen`? → no; not worth disabling app-wide multitasking for one screen.
-
----
-
 ### FC-003: Text-to-speech narration
 
 **Status:** Consideration
@@ -289,6 +274,13 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 ---
 
 ## Completed
+
+### FC-021: Reader orientation gate — stuck "rotate your device" overlay — Done 2026-06-22
+
+Fixed a reported bug where the story reader blocked rendering behind a full-screen "Stories read best in landscape" overlay that never dismissed on rotation. Root cause: `isPortrait` ORed the `expo-screen-orientation` enum with `height > width` and relied on `lockAsync(LANDSCAPE)` actually rotating the UI; when the lock silently no-ops (iPad multitasking, OS portrait rotation-lock, simulators) the window never flips, the orientation listener never fires a landscape event, and the gate can never clear — trapping the user with only a Close button. Fix: always render the reader (the page-curl `Curl` is dimension-driven), detect portrait purely from `useWindowDimensions` (`height > width`), drop the unreliable orientation state + listener, and replace the blocking overlay with a small non-blocking auto-dismissing "Best read in landscape" hint. Lock is best-effort and logs on failure. Considered + rejected `UIRequiresFullScreen` (disables iPad multitasking app-wide). Adversarial review → APPROVE, no code changes required.
+
+- **Plan:** [docs/plans/fc-021.md](plans/fc-021.md)
+- **PR:** [#25](https://github.com/memon1987/ai-storybook-app/pull/25) (squash-merged as `9df56e7`)
 
 ### FC-020: Baked-in text + OCR text-repair; delete Skia overlay — Done 2026-05-24
 
