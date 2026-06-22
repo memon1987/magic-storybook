@@ -172,7 +172,7 @@ OCR detect-and-regenerate; reject Pro (char drift); exclude Recraft.** Productio
 
 ### FC-017: Story generation reliability — request resumes / async job model
 
-**Status:** Executing — Phase 1 instrumentation merged (PR #23, `f5f9cb5`, 2026-05-27); Phase 1 investigation note + Phases 2-4 still pending
+**Status:** Executing — Phase 1 **complete** (investigation defensive-default branch applied, see `docs/investigations/fc-017-instance-death-2026-06-22.md`); Phase 2 ready to start with two additional constraints (memory bump to 1024Mi + in-flight buffer release between phases)
 **Size estimate:** L (likely architecture refactor)
 **Owner:** unassigned
 **Plan file:** [docs/plans/fc-017.md](plans/fc-017.md)
