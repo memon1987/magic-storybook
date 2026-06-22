@@ -71,6 +71,9 @@ export default function ReadScreen() {
         ]
       : contentPages;
     if (contentPages.length === 0) return base;
+    // Synthetic end page: pageNumber -1 + empty imageUrl are sentinels. This
+    // object is local to this useMemo and never persisted/read by other
+    // consumers; the empty imageUrl makes usePageImages return null (black page).
     const endPage: StoryPage = { pageNumber: -1, text: '', imageUrl: '' };
     return [...base, endPage];
   }, [story?.titlePageImageUrl, story?.titlePage?.text, story?.title, story?.pages]);
