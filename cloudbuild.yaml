@@ -37,6 +37,21 @@ steps:
       # creates the service would inherit the 300s default and break both
       # production story-gen and the spike route. 3600s = 60 min upper bound.
       - '--timeout=3600'
+      # FC-025 (concurrency math, post-Phase-1 OOM investigation): each story
+      # peaks at ~321 MB; pack at most 4 concurrent stories per instance at
+      # 2 GiB to stay at ~63% utilization. Without these pinned, next deploy
+      # silently regresses to defaults (concurrency=80, memory=512Mi) and a
+      # multi-user burst OOMs the container.
+      - '--memory=2048Mi'
+      - '--concurrency=4'
+      # FC-017 Phase 3 (PR #29 BLOCKER-1): the route returns 202 and the
+      # worker continues running after res.send(). With CPU throttling on
+      # (the Cloud Run default), the background worker freezes at every
+      # await between Gemini calls; heartbeats arrive late, claimLock
+      # judges them stale, another worker takes over and duplicates work.
+      # --no-cpu-throttling pins CPU always allocated; required for the
+      # FC-017 fire-and-forget pattern to work at all.
+      - '--no-cpu-throttling'
 
 options:
   logging: CLOUD_LOGGING_ONLY

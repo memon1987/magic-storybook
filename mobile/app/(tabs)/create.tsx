@@ -309,7 +309,12 @@ export default function CreateScreen() {
         </AnimatedPressable>
       </View>
 
-      {mutation.isPending && <GeneratingOverlay />}
+      {/* FC-017 Phase 3: GeneratingOverlay removed. The mutation now resolves
+          on the 202-ACK in ~100-500ms; navigation to /story/[id]/generating
+          fires immediately and that screen is responsible for "we're working
+          on it" UX. A 500ms overlay flash was producing a visible jitter
+          mid-transition and the copy ("This usually takes about a minute")
+          was lying about the actual mutation duration. */}
     </GradientBackground>
   );
 }

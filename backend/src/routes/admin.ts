@@ -16,6 +16,7 @@
  */
 import { Router, Request, Response } from 'express';
 import { Firestore, FieldValue, Timestamp } from '@google-cloud/firestore';
+import { timingSafeEqual } from 'node:crypto';
 import { FailureCode } from '../types';
 
 const router = Router();
@@ -39,7 +40,14 @@ function checkSweepAuth(req: Request, res: Response): boolean {
     return false;
   }
   const auth = req.header('Authorization');
-  if (auth !== `Bearer ${token}`) {
+  // PR-29 MEDIUM-5: constant-time comparison. Strings != is variable-time in
+  // V8 (early exit on first mismatched byte); a timing oracle could leak the
+  // token character-by-character. Negligible at internet RTT but trivial to
+  // fix. Coerce both sides to Buffers of equal length first (timingSafeEqual
+  // throws on length mismatch — that's the leak fix's first guard).
+  const expected = Buffer.from(`Bearer ${token}`);
+  const provided = Buffer.from(auth ?? '');
+  if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) {
     res.status(401).json({ error: 'Unauthorized' });
     return false;
   }
@@ -51,22 +59,37 @@ router.post('/sweep-orphans', async (req: Request, res: Response) => {
 
   try {
     const cutoff = Timestamp.fromMillis(Date.now() - ORPHAN_THRESHOLD_MS);
-    // Requires a composite index on (status ASC, workerHeartbeatAt ASC).
-    // Firestore prints a one-click link on the first call if it's missing.
-    const snapshot = await db
-      .collection('stories')
-      .where('status', '==', 'generating')
-      .where('workerHeartbeatAt', '<', cutoff)
-      .get();
+    const createdCutoff = Timestamp.fromMillis(Date.now() - ORPHAN_THRESHOLD_MS);
 
-    if (snapshot.empty) {
+    // FC-025/PR-29 HIGH-2: sweep BOTH `status='generating'` (worker started
+    // but heartbeat went stale) AND `status='queued'` (worker never started
+    // — e.g. process killed between the route's initial set() and the
+    // background worker getting picked up by the JS scheduler). The
+    // 'generating' case uses workerHeartbeatAt < cutoff; the 'queued'
+    // case uses createdAt < cutoff (queued docs never had a heartbeat).
+    //
+    // Two queries instead of an `in` query so each can hit its own
+    // composite index and the heartbeat predicate stays simple.
+    const [genSnap, queuedSnap] = await Promise.all([
+      db.collection('stories')
+        .where('status', '==', 'generating')
+        .where('workerHeartbeatAt', '<', cutoff)
+        .get(),
+      db.collection('stories')
+        .where('status', '==', 'queued')
+        .where('createdAt', '<', createdCutoff)
+        .get(),
+    ]);
+
+    const allDocs = [...genSnap.docs, ...queuedSnap.docs];
+    if (allDocs.length === 0) {
       res.json({ swept: 0 });
       return;
     }
 
     const batch = db.batch();
     const ids: string[] = [];
-    for (const doc of snapshot.docs) {
+    for (const doc of allDocs) {
       ids.push(doc.id);
       batch.update(doc.ref, {
         status: 'failed',
@@ -76,8 +99,8 @@ router.post('/sweep-orphans', async (req: Request, res: Response) => {
       });
     }
     await batch.commit();
-    console.warn(`[FC-017 sweep] Marked ${snapshot.size} orphan stories failed: ${ids.join(', ')}`);
-    res.json({ swept: snapshot.size, ids });
+    console.warn(`[FC-017 sweep] Marked ${allDocs.length} orphan stories failed (${genSnap.size} generating, ${queuedSnap.size} queued): ${ids.join(', ')}`);
+    res.json({ swept: allDocs.length, generating: genSnap.size, queued: queuedSnap.size, ids });
   } catch (error) {
     console.error('[FC-017 sweep] Sweep failed:', error);
     res.status(500).json({

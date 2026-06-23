@@ -16,7 +16,7 @@
  * library; the subscription unsubscribes on unmount. The library renders
  * the story's current status row so the user can come back to it.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Pressable } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -45,14 +45,19 @@ export default function GeneratingScreen() {
   const [result, setResult] = useState<StorySubscriptionResult | null>(null);
   const [isResuming, setIsResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  // PR-29 HIGH-3: snapshot can fire multiple times; only auto-navigate ONCE
+  // per id. Without this guard, a status flip back to 'generating' (e.g.
+  // user hits Resume on a story we already navigated away from) would
+  // call router.replace again on a different screen.
+  const navigatedRef = useRef(false);
 
   useEffect(() => {
     if (!id) return;
+    navigatedRef.current = false;
     const unsub = subscribeToStory(id, (next) => {
       setResult(next);
-      // Auto-navigate on terminal success. router.replace prevents the user
-      // from accidentally swiping back into the now-stale generating screen.
-      if (!('error' in next) && next.status === 'complete') {
+      if (!('error' in next) && next.status === 'complete' && !navigatedRef.current) {
+        navigatedRef.current = true;
         router.replace(`/story/${id}/read`);
       }
     });

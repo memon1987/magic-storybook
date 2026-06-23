@@ -10,6 +10,7 @@ import {
   StoryInput,
   ArtStyle,
   StoryDocument,
+  FailureCode,
 } from '../types';
 
 /**
@@ -20,7 +21,7 @@ import {
  * payloads, and resume internals. The pre-Phase-2 GET /:id spread the
  * whole doc; this allowlist replaces that.
  */
-const CLIENT_VISIBLE_DOC_FIELDS = [
+export const CLIENT_VISIBLE_DOC_FIELDS = [
   'userId', 'title', 'childName', 'childGender', 'favoriteAnimal',
   'specialFriendName', 'specialFriendDescription', 'setting', 'moral',
   'authorStyle', 'writingStyle', 'length', 'artStyle', 'status', 'pageCount',
@@ -28,7 +29,11 @@ const CLIENT_VISIBLE_DOC_FIELDS = [
   'titlePageImageUrl', 'castReferenceUrl', 'progress', 'failureReason',
 ] as const;
 
-function pickClientFields(data: FirebaseFirestore.DocumentData): Record<string, unknown> {
+// PR-29 MEDIUM-6: explicit allowlist filter. Tested in
+// `__tests__/clientFields.test.ts` to assert no internal field
+// (workerId / workerHeartbeatAt / storyText / pageUrls / attempt /
+// castAttempted / titleAttempted) ever appears in the output.
+export function pickClientFields(data: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const k of CLIENT_VISIBLE_DOC_FIELDS) {
     if (data[k] !== undefined) out[k] = data[k];
@@ -56,17 +61,43 @@ router.use(authMiddleware);
  * before this PR shipped; revision storybook-api-00119-h6d+ have it set.
  */
 function fireWorkerInBackground(storyId: string): void {
-  runStoryWorker(storyId).catch((err) => {
+  runStoryWorker(storyId).catch(async (err) => {
     console.error(`${storyTag(storyId)} Background worker rejected:`, err);
     if (err instanceof LockHeldError) {
+      // Another worker holds the lock — that's a legitimate concurrent state,
+      // NOT a failure for this doc. Emit the telemetry but don't clobber the
+      // doc (the other worker owns the status field).
       emitStageEvent({ storyId, stage: 'total', latencyMs: 0, outcome: 'failure', detail: { errorType: 'LockHeldError' } });
-    } else if (err instanceof StoryNotResumableError) {
-      emitStageEvent({ storyId, stage: 'total', latencyMs: 0, outcome: 'failure', detail: { errorType: 'StoryNotResumableError', reason: err.reason } });
+      return;
     }
-    // Internal worker errors (everything inside its try block) already emitted
-    // a `total` failure stage_event from the worker's catch + wrote
-    // status='failed' + failureReason to the doc. The mobile snapshot
-    // subscription will see that.
+    if (err instanceof StoryNotResumableError) {
+      // Doc is either already complete or doesn't exist. Don't touch it.
+      emitStageEvent({ storyId, stage: 'total', latencyMs: 0, outcome: 'failure', detail: { errorType: 'StoryNotResumableError', reason: err.reason } });
+      return;
+    }
+    // FC-025/PR-29 BLOCKER-2: every OTHER thrown error from runStoryWorker
+    // (transient Firestore unavailability in claimLock, runTransaction retry
+    // exhaustion, network resets, deserialization issues) used to fall through
+    // here with no follow-up — the doc stayed `status='queued'` forever,
+    // outside the orphan-sweep's `status='generating'` predicate. Mark the
+    // doc failed explicitly so mobile's subscription sees it.
+    //
+    // Internal worker errors (inside its try block) already wrote
+    // status='failed' atomically — this update is a no-op merge in that case.
+    // We don't gate on "is this a worker-internal error" to keep the path
+    // simple and idempotent.
+    emitStageEvent({
+      storyId, stage: 'total', latencyMs: 0, outcome: 'failure',
+      detail: { errorType: 'BackgroundWorkerError', message: err instanceof Error ? err.message : String(err) },
+    });
+    try {
+      await db.collection('stories').doc(storyId).update({
+        status: 'failed',
+        failureReason: 'unknown' as FailureCode,
+      });
+    } catch (writeErr) {
+      console.error(`${storyTag(storyId)} Could not mark doc failed after background error:`, writeErr);
+    }
   });
 }
 
@@ -328,6 +359,21 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
     // Ensure user owns this story
     if (storyDoc.data()?.userId !== userId) {
       res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+
+    // FC-025/PR-29 HIGH-5: refuse delete if a worker is mid-flight on this
+    // doc. The worker would otherwise keep writing to a deleted doc (every
+    // storyRef.update throws NOT_FOUND inside the worker's try block,
+    // catch tries to write status='failed' which also throws), orphaning
+    // char-ref / page images in Cloud Storage with no cleanup path. The
+    // user can wait for terminal status (or run the sweep) and delete then.
+    const docStatus = storyDoc.data()?.status;
+    if (docStatus === 'queued' || docStatus === 'generating') {
+      res.status(409).json({
+        error: 'Story is still generating',
+        message: 'Wait for the story to finish or fail before deleting.',
+      });
       return;
     }
 
