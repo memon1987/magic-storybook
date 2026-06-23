@@ -172,7 +172,7 @@ OCR detect-and-regenerate; reject Pro (char drift); exclude Recraft.** Productio
 
 ### FC-017: Story generation reliability — request resumes / async job model
 
-**Status:** Executing — Phase 1 **complete** (investigation defensive-default branch applied, see `docs/investigations/fc-017-instance-death-2026-06-22.md`); Phase 2 ready to start with two additional constraints (memory bump to 1024Mi + in-flight buffer release between phases)
+**Status:** Executing — Phase 1 + Phase 2 **shipped** (PR #26 squash-merged as `ece2458` on 2026-06-22, with FC-025 remediation + CONFIRMED-CLEAN confirmation review). Phase 3 (async job model) + Phase 4 (mobile snapshot + orphan sweep) still pending.
 **Size estimate:** L (likely architecture refactor)
 **Owner:** unassigned
 **Plan file:** [docs/plans/fc-017.md](plans/fc-017.md)
@@ -290,28 +290,18 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
-### FC-025: FC-017 Phase 2 (PR #26) — adversarial-review remediation
-
-**Status:** Plan published (2026-06-22)
-**Size estimate:** M (mechanical fixes; recall is large but per-fix is small)
-**Owner:** Zeshan / Claude
-**Parent FC:** FC-017 Phase 2 (`docs/plans/fc-017.md`)
-**Plan file:** [docs/plans/fc-025.md](plans/fc-025.md)
-
-**Problem / opportunity:** PR #26 (FC-017 Phase 2: resumable story-generation pipeline) was opened without the adversarial peer review CLAUDE.md requires for plan-driven L work. Two independent post-hoc adversarial reviews (`/code-review max` + a fresh senior-SRE persona review) converged on REQUEST_CHANGES with **6 BLOCKER-class bugs** that would cause production data corruption or stuck stories within the first month of real user traffic, plus 8 HIGH and 6 MEDIUM findings. Both reviewers independently identified the same top bugs; Round 2 surfaced a 7th BLOCKER-tier `FieldValue.serverTimestamp()` nested-map footgun that Round 1 missed.
-
-**Sub-FC framing:** structurally a follow-up to FC-017 Phase 2, not its replacement. The architecture is sound; the bugs are implementation-level. Sub-FC keeps the remediation work traceable + ensures the confirmation review per CLAUDE.md actually happens before PR #26 merges.
-
-**Sequence:** BLOCKERs (6) → HIGHs in themed batches (privacy, lock correctness, telemetry restoration, operational) → MEDIUMs (defer or accept with rationale) → LOWs (opportunistic) → write the missing `__tests__/resume.test.ts` file the FC-017 plan §211 explicitly named → confirmation review. Merge gated on CONFIRMED-CLEAN.
-
-**Open questions (resolved in plan):**
-- B-6 fix flavor: castAttempted boolean field vs sentinel string? → boolean, clearer intent.
-- B-1 in-process dedup: return same result via shared Promise vs return 409 to second caller? → shared Promise; matches mobile double-tap UX.
-- Cloud Tasks reconsideration (architectural counter-argument Round 2 raised): out of scope here; file as separate FC if revisiting before Phase 3.
-
 ---
 
 ## Completed
+
+### FC-025: FC-017 Phase 2 (PR #26) adversarial-review remediation — Done 2026-06-22
+
+Sub-FC for FC-017 Phase 2. After PR #26 was opened without the CLAUDE.md-required adversarial review, two independent post-hoc reviews (`/code-review max` distributed-systems lens + a fresh senior-SRE Firestore-semantics persona, no shared context) converged on REQUEST_CHANGES with the same 6 BLOCKER-class bugs (lock re-entry race, placeholder URL lock-in, heartbeat race with batch.commit, catch-vs-finally lock window, failureReason leak, null-as-failure infinite retry); Round 2 surfaced a 7th BLOCKER-tier `FieldValue.serverTimestamp()` nested-map footgun Round 1 missed. FC-025 plan consolidated 6 BLOCKERs + 10 HIGHs + 6 MEDIUMs + 6 LOWs across 6 sequenced stages, all shipped in fix commit `9e38aed` on the same PR branch. Confirmation review per CLAUDE.md returned CONFIRMED-CLEAN (all 20 contract items verified individually, zero STILL-BROKEN, no merge-blocking regressions). PR #26 squash-merged as `ece2458` with both FC-017 Phase 2 + FC-025 remediation in one commit.
+
+- **Plan:** [docs/plans/fc-025.md](plans/fc-025.md)
+- **PR:** [#26](https://github.com/memon1987/ai-storybook-app/pull/26) (squash-merged as `ece2458`)
+- **Parent FC:** FC-017 Phase 2 (`docs/plans/fc-017.md`)
+- **Process lesson:** the CLAUDE.md adversarial-review gate caught BLOCKER-class data-corruption bugs that would otherwise have shipped to production. Two-reviewer stakes-calibration for this class of work (distributed locks + canonical Firestore writes) validated — Round 2 found a bug Round 1 missed.
 
 ### FC-022: Reader "The End" — dedicated end page instead of last-page overlay — Done 2026-06-22
 
