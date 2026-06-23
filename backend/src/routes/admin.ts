@@ -17,7 +17,7 @@
 import { Router, Request, Response } from 'express';
 import { Firestore, FieldValue, Timestamp } from '@google-cloud/firestore';
 import { timingSafeEqual } from 'node:crypto';
-import { FailureCode } from '../types';
+import { FailureCode, StoryDocument } from '../types';
 
 const router = Router();
 const db = new Firestore();
@@ -54,6 +54,13 @@ function checkSweepAuth(req: Request, res: Response): boolean {
   return true;
 }
 
+// FC-030 Change 2 — cap each query at 100 docs. Under a regional outage
+// that flips many docs to generating/queued at once, we'd otherwise pull
+// a massive snapshot and risk exceeding Cloud Scheduler's 180s attempt
+// deadline (each per-doc transaction below is ~50-100ms). The next cron
+// tick picks up the rest.
+const SWEEP_QUERY_LIMIT = 100;
+
 router.post('/sweep-orphans', async (req: Request, res: Response) => {
   if (!checkSweepAuth(req, res)) return;
 
@@ -74,10 +81,12 @@ router.post('/sweep-orphans', async (req: Request, res: Response) => {
       db.collection('stories')
         .where('status', '==', 'generating')
         .where('workerHeartbeatAt', '<', cutoff)
+        .limit(SWEEP_QUERY_LIMIT)
         .get(),
       db.collection('stories')
         .where('status', '==', 'queued')
         .where('createdAt', '<', createdCutoff)
+        .limit(SWEEP_QUERY_LIMIT)
         .get(),
     ]);
 
@@ -87,20 +96,57 @@ router.post('/sweep-orphans', async (req: Request, res: Response) => {
       return;
     }
 
-    const batch = db.batch();
+    // FC-030 Change 2 — per-doc transactional re-read. Previously a single
+    // bulk `batch.update`: the query returned docs whose heartbeat was
+    // stale at query time, but between query-prep and the batch.commit
+    // (~100-500ms) a `claimLock` takeover could land a fresh heartbeat.
+    // The bulk batch then clobbered the takeover's `status='generating'`
+    // with `status='failed:orphaned'` AND deleted `workerId`/heartbeat —
+    // setting up a split-brain on the next Resume (claimLock saw
+    // workerId=undefined and claimed, while the original worker was
+    // still running). Two workers on one storyId → success-path batches
+    // wrote pages with (formerly) auto-id'd refs → duplicate pages.
+    //
+    // Per-doc transactions re-read INSIDE the txn and skip if the
+    // predicate no longer holds. Combined with FC-030 Change 1
+    // (deterministic page IDs), the corruption class is closed both at
+    // the race-window-narrowing layer (this) and the idempotency-floor
+    // layer (Change 1).
     const ids: string[] = [];
+    const failedIds: string[] = [];
+    let sweptGenerating = 0;
+    let sweptQueued = 0;
     for (const doc of allDocs) {
-      ids.push(doc.id);
-      batch.update(doc.ref, {
-        status: 'failed',
-        failureReason: 'orphaned' as FailureCode,
-        workerId: FieldValue.delete(),
-        workerHeartbeatAt: FieldValue.delete(),
-      });
+      try {
+        const result = await sweepOrphanTx(db, doc.ref, cutoff.toMillis(), createdCutoff.toMillis());
+        if (result === 'generating') sweptGenerating++;
+        else if (result === 'queued') sweptQueued++;
+        if (result) ids.push(doc.id);
+      } catch (err) {
+        // FC-030 confirmation review MEDIUM-2: log at ERROR level (not
+        // WARN) and surface the failed-doc IDs in the response so a
+        // persistent per-doc tx failure becomes a visible signal in
+        // Cloud Scheduler's HTTP-response history + Cloud Logging
+        // queries. Without this, a doc could fail every sweep tick
+        // forever and the only signal is a `console.warn` in logs that
+        // no human is paged on.
+        console.error(`[FC-017 sweep] Doc ${doc.id} sweep tx failed:`, err);
+        failedIds.push(doc.id);
+      }
     }
-    await batch.commit();
-    console.warn(`[FC-017 sweep] Marked ${allDocs.length} orphan stories failed (${genSnap.size} generating, ${queuedSnap.size} queued): ${ids.join(', ')}`);
-    res.json({ swept: allDocs.length, generating: genSnap.size, queued: queuedSnap.size, ids });
+
+    const sweptTotal = sweptGenerating + sweptQueued;
+    const skippedCount = allDocs.length - sweptTotal - failedIds.length;
+    console.warn(`[FC-017 sweep] Marked ${sweptTotal} orphan stories failed (${sweptGenerating} generating, ${sweptQueued} queued; ${skippedCount} skipped due to takeover/already-terminal; ${failedIds.length} tx-failures): ${ids.join(', ')}`);
+    res.json({
+      swept: sweptTotal,
+      generating: sweptGenerating,
+      queued: sweptQueued,
+      skipped: skippedCount,
+      txFailures: failedIds.length,
+      ids,
+      failedIds,
+    });
   } catch (error) {
     console.error('[FC-017 sweep] Sweep failed:', error);
     res.status(500).json({
@@ -109,5 +155,49 @@ router.post('/sweep-orphans', async (req: Request, res: Response) => {
     });
   }
 });
+
+/**
+ * FC-030 — extracted sweep transaction body so tests can exercise the
+ * production code path. Pure-ish: takes (db, ref, cutoffs) and returns
+ * what kind of doc was swept (or null if the takeover-race aborted us).
+ *
+ * Predicate: status='generating' AND heartbeat still < cutoff → mark
+ * failed:orphaned. status='queued' AND createdAt still < cutoff → mark
+ * failed:orphaned. Any other state → no-op (a takeover landed a fresh
+ * heartbeat, or the doc has reached a terminal status since the query
+ * snapshot was taken).
+ */
+export async function sweepOrphanTx(
+  db: Firestore,
+  ref: FirebaseFirestore.DocumentReference,
+  cutoffMs: number,
+  createdCutoffMs: number,
+): Promise<'generating' | 'queued' | null> {
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return null;
+    const data = snap.data() as Partial<StoryDocument>;
+    const status = data.status;
+    if (status === 'generating') {
+      const hb = data.workerHeartbeatAt as Timestamp | undefined;
+      // A takeover that landed between query-prep and now refreshed
+      // workerHeartbeatAt — we now see the fresh value and abort.
+      if (!hb || hb.toMillis() >= cutoffMs) return null;
+    } else if (status === 'queued') {
+      const created = data.createdAt as Timestamp | undefined;
+      if (!created || created.toMillis() >= createdCutoffMs) return null;
+    } else {
+      // Already terminal (complete/failed); nothing to do.
+      return null;
+    }
+    tx.update(ref, {
+      status: 'failed',
+      failureReason: 'orphaned' as FailureCode,
+      workerId: FieldValue.delete(),
+      workerHeartbeatAt: FieldValue.delete(),
+    });
+    return status as 'generating' | 'queued';
+  });
+}
 
 export default router;
