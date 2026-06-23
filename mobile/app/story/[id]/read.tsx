@@ -23,7 +23,7 @@ import { useTheme } from '../../../contexts/ThemeContext';
 import { GradientBackground } from '../../../components/GradientBackground';
 import { AnimatedPressable } from '../../../components/AnimatedPressable';
 import { SplashScreenAnimated } from '../../../components/SplashScreenAnimated';
-import { Curl, type TapZone } from '../../../components/PageCurl/Curl';
+import { Curl } from '../../../components/PageCurl/Curl';
 import { usePageImages } from '../../../components/PageCurl/usePageImages';
 import { readerPageLabel } from '../../../components/PageCurl/paging';
 
@@ -126,15 +126,9 @@ export default function ReadScreen() {
     setControlsVisible(true);
   };
 
-  const handleTap = (zone: TapZone) => {
-    if (zone === 'left') {
-      goToPage(currentPage - 1);
-    } else if (zone === 'right') {
-      goToPage(currentPage + 1);
-    } else {
-      setControlsVisible((v) => !v);
-    }
-  };
+  // FC-029: tap only toggles the controls — it never navigates. Page turns are
+  // the curl swipe (forward + backward); the dots row jumps to any page.
+  const handleTap = () => setControlsVisible((v) => !v);
 
   const handlePageChange = (newPage: number) => {
     setCurrentPage(newPage);
@@ -172,6 +166,7 @@ export default function ReadScreen() {
         height={height}
         currentImage={pageImages.current}
         nextImage={pageImages.next}
+        previousImage={pageImages.prev}
         currentPage={currentPage}
         totalPages={pages.length}
         onPageChange={handlePageChange}

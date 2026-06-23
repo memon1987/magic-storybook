@@ -288,6 +288,17 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
+### FC-029: Reader — decouple tap from navigation + backward page-curl
+
+**Status:** Executing
+**Size estimate:** M
+**Owner:** Zeshan
+**Plan file:** [docs/plans/fc-029.md](plans/fc-029.md)
+
+**Problem / opportunity:** In the reader, tapping is overloaded — it toggles the info bars AND navigates via hard-coded zones (left 25% = prev, right 25% = next, center 50% = toggle), so a tap meant to reveal the bars frequently lands in an edge zone and accidentally flips the page (reported on build 11). Fix: (1) a tap anywhere only toggles the controls bars — never navigates; (2) add a backward page-curl swipe (the curl was forward-only). Validated the existing GLSL shader is reusable for backward (curl-layer top = previous image, `pointer` animated 0→width makes the fold sweep left→right so the previous page enters from the left); `usePageImages` already exposes `prev`. Two files: `Curl.tsx`, `read.tsx`.
+
+---
+
 ---
 
 ## Completed
