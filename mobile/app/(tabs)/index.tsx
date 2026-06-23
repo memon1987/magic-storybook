@@ -18,20 +18,19 @@ import Animated, {
   withTiming,
   Easing,
 } from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getStories, deleteStory, Story } from '../../services/api';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useResponsive } from '../../hooks/useResponsive';
 import { GradientBackground } from '../../components/GradientBackground';
 import { StoryCard } from '../../components/StoryCard';
 import { AnimatedPressable } from '../../components/AnimatedPressable';
-
-const COLUMN_GAP = 14;
 
 export default function LibraryScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { palette } = useTheme();
-  const insets = useSafeAreaInsets();
+  const { gutter, insets, gridColumns } = useResponsive();
+  const { columns, cellWidth, gap } = gridColumns();
 
   const { data: stories = [], isLoading, refetch, isRefetching } = useQuery({
     queryKey: ['stories'],
@@ -66,13 +65,8 @@ export default function LibraryScreen() {
   );
 
   const renderItem = useCallback(
-    ({ item, index }: { item: Story; index: number }) => (
-      <View
-        style={[
-          styles.cell,
-          { marginLeft: index % 2 === 0 ? 0 : COLUMN_GAP },
-        ]}
-      >
+    ({ item }: { item: Story }) => (
+      <View style={{ width: cellWidth }}>
         <StoryCard
           story={item}
           onPress={handleStoryPress}
@@ -80,12 +74,21 @@ export default function LibraryScreen() {
         />
       </View>
     ),
-    [handleStoryPress, handleStoryLongPress]
+    [cellWidth, handleStoryPress, handleStoryLongPress]
   );
 
   return (
     <GradientBackground colors={[palette.colors.background, palette.colors.cardBg]}>
-      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+      <View
+        style={[
+          styles.header,
+          {
+            paddingTop: insets.top + 12,
+            paddingLeft: gutter + insets.left,
+            paddingRight: gutter + insets.right,
+          },
+        ]}
+      >
         <View style={styles.headerLeft}>
           <Text style={[styles.title, { color: palette.colors.textDark }]}>My Library</Text>
           <Text style={[styles.subtitle, { color: palette.colors.textMuted }]}>
@@ -100,15 +103,19 @@ export default function LibraryScreen() {
       </View>
 
       <FlatList
+        // RN requires a fresh key when numColumns changes, else it asserts.
+        // Resetting scroll position on rotation is acceptable for a library.
+        key={`grid-${columns}`}
         data={stories}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
-        numColumns={2}
+        numColumns={columns}
+        columnWrapperStyle={{ gap, marginBottom: gap }}
         contentContainerStyle={[
           styles.listContent,
+          { paddingLeft: gutter + insets.left, paddingRight: gutter + insets.right },
           stories.length === 0 && styles.listContentEmpty,
         ]}
-        ItemSeparatorComponent={() => <View style={{ height: COLUMN_GAP }} />}
         refreshControl={
           <RefreshControl
             refreshing={isRefetching}
@@ -185,7 +192,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
     paddingBottom: 16,
   },
   headerLeft: {
@@ -213,13 +219,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   listContent: {
-    paddingHorizontal: 20,
     paddingBottom: 100,
   },
   listContentEmpty: {
-    flex: 1,
-  },
-  cell: {
     flex: 1,
   },
   emptyWrap: {

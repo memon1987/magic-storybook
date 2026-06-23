@@ -5,10 +5,12 @@ import {
   Image as SkiaImage,
   Group,
   Paint,
+  Blur,
   RuntimeShader,
   Skia,
   Rect,
   type SkImage,
+  type SkRect,
 } from '@shopify/react-native-skia';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import {
@@ -37,6 +39,34 @@ interface CurlProps {
 const CORNER_RADIUS = 0;
 const COMMIT_THRESHOLD_RATIO = 0.25;
 const CURL_ANIMATION_MS = 300;
+
+// FC-026: blurred ambient backdrop. The illustration is drawn fit="contain" so
+// no baked-in narration text is ever cropped on any device/orientation; the
+// resulting letterbox margins are filled with a blurred, darkened copy of the
+// same image so the page reads full-bleed instead of black-barred.
+const BACKDROP_BLUR = 22;
+const BACKDROP_DARKEN = 'rgba(0,0,0,0.35)';
+
+interface PageLayersProps {
+  image: SkImage;
+  rect: SkRect;
+  width: number;
+  height: number;
+}
+
+// One story page = blurred cover backdrop + darken scrim + sharp contained image.
+// Used for both the resting/current page and the next page revealed under the curl.
+function PageLayers({ image, rect, width, height }: PageLayersProps) {
+  return (
+    <Group>
+      <Group layer={<Paint><Blur blur={BACKDROP_BLUR} /></Paint>}>
+        <SkiaImage image={image} rect={rect} fit="cover" />
+      </Group>
+      <Rect x={0} y={0} width={width} height={height} color={BACKDROP_DARKEN} />
+      <SkiaImage image={image} rect={rect} fit="contain" />
+    </Group>
+  );
+}
 
 // FC-020: pure page-curl of the illustrations. Narration text is baked into the
 // images themselves, so there is no text overlay to render here anymore.
@@ -125,13 +155,8 @@ export function Curl({
         <Canvas style={{ width, height }}>
           <Rect x={0} y={0} width={width} height={height} color="black" />
 
-          {/*
-            fit="cover" fills the canvas with no letterbox bands. The story
-            prompt asks for landscape with central focal subjects, so
-            cover-cropping the edges is acceptable.
-          */}
           {nextImage && (
-            <SkiaImage image={nextImage} rect={imageRect} fit="cover" />
+            <PageLayers image={nextImage} rect={imageRect} width={width} height={height} />
           )}
 
           {currentImage && (
@@ -144,7 +169,7 @@ export function Curl({
                 }
                 transform={[{ scale: pd }]}
               >
-                <SkiaImage image={currentImage} rect={imageRect} fit="cover" />
+                <PageLayers image={currentImage} rect={imageRect} width={width} height={height} />
               </Group>
             </Group>
           )}
