@@ -1,6 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { User } from 'firebase/auth';
-import { onAuthChange, signIn, signOut, register } from '../services/firebase';
+import {
+  onAuthChange,
+  signIn,
+  signOut,
+  register,
+  signInWithGoogle as googleSignIn,
+  signInWithApple as appleSignIn,
+} from '../services/firebase';
 
 interface AuthState {
   user: User | null;
@@ -12,6 +19,8 @@ interface UseAuthReturn extends AuthState {
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   signup: (email: string, password: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
+  signInWithApple: () => Promise<void>;
   clearError: () => void;
 }
 
@@ -67,6 +76,28 @@ export function useAuth(): UseAuthReturn {
     }
   }, []);
 
+  const signInWithGoogle = useCallback(async () => {
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+    try {
+      await googleSignIn();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Google sign-in failed';
+      setState((prev) => ({ ...prev, error: message, loading: false }));
+      throw error;
+    }
+  }, []);
+
+  const signInWithApple = useCallback(async () => {
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+    try {
+      await appleSignIn();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Apple sign-in failed';
+      setState((prev) => ({ ...prev, error: message, loading: false }));
+      throw error;
+    }
+  }, []);
+
   const clearError = useCallback(() => {
     setState((prev) => ({ ...prev, error: null }));
   }, []);
@@ -76,6 +107,8 @@ export function useAuth(): UseAuthReturn {
     login,
     logout,
     signup,
+    signInWithGoogle,
+    signInWithApple,
     clearError,
   };
 }

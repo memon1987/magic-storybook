@@ -6,6 +6,9 @@ import {
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
   onAuthStateChanged,
+  GoogleAuthProvider,
+  OAuthProvider,
+  signInWithCredential,
   User,
 } from 'firebase/auth';
 // getReactNativePersistence ships only in firebase's React Native build. The
@@ -21,6 +24,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // in-flight story docs. Backend writes to the `stories` collection; mobile
 // reads via Firestore Security Rules (gated to doc owner).
 import { getFirestore } from 'firebase/firestore';
+// FC-029: native Google account sheet + Apple Sign-In (iOS). Both acquire a
+// provider token natively, then exchange it for a Firebase credential via
+// signInWithCredential — the Firebase Web SDK's signInWithPopup/Redirect do
+// not work in React Native.
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Crypto from 'expo-crypto';
 
 const PLACEHOLDER_PATTERN = /^(your-|XXXX|0000)/;
 
@@ -100,6 +110,24 @@ export const auth = isNewApp
 // (only the doc's userId can read).
 export const db = getFirestore(app);
 
+// FC-029: configure the native Google Sign-In SDK once at module load.
+// Static literal process.env access so Metro inlines EXPO_PUBLIC_* at bundle
+// time (same rule as the RAW_ENV block above — dynamic access is NOT inlined).
+//
+// FOOTGUN: webClientId MUST be the *Web* OAuth client ID (the audience Firebase
+// validates), NOT the iOS client ID. Passing the iOS client yields a null
+// idToken from signIn() and the credential exchange fails. iosClientId is
+// iOS-only and ignored on Android.
+GoogleSignin.configure({
+  webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+  iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+});
+
+// Hex-encode random bytes for the Apple Sign-In nonce (see signInWithApple).
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 /**
  * Register a new user with email and password
  */
@@ -113,6 +141,79 @@ export async function register(email: string, password: string): Promise<User> {
  */
 export async function signIn(email: string, password: string): Promise<User> {
   const userCredential = await signInWithEmailAndPassword(auth, email, password);
+  return userCredential.user;
+}
+
+/**
+ * Sign in with Google via the native account sheet, then exchange the Google
+ * ID token for a Firebase credential. Produces a standard Firebase user for
+ * project ai-storybook-app-2025 — the backend's verifyIdToken accepts its ID
+ * token unchanged. Works on iOS + Android.
+ *
+ * Throws `Error('Google sign-in was cancelled.')` when the user dismisses the
+ * sheet; callers swallow that without surfacing an alert.
+ */
+export async function signInWithGoogle(): Promise<User> {
+  // Android requires Play Services; on iOS this no-ops. Throws if unavailable.
+  await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+
+  const response = await GoogleSignin.signIn();
+
+  // v16 returns a discriminated union: { type: 'success', data: { idToken } }
+  // or { type: 'cancelled' | 'noSavedCredentialFound', data: null }.
+  if (response.type !== 'success') {
+    throw new Error('Google sign-in was cancelled.');
+  }
+
+  const idToken = response.data.idToken;
+  if (!idToken) {
+    // Almost always means EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID is the iOS client ID
+    // instead of the Web client ID, or the Web client isn't registered with the
+    // Firebase Google provider.
+    throw new Error(
+      'Google sign-in did not return an ID token. Verify EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID is the Web OAuth client ID.'
+    );
+  }
+
+  const credential = GoogleAuthProvider.credential(idToken);
+  const userCredential = await signInWithCredential(auth, credential);
+  return userCredential.user;
+}
+
+/**
+ * Sign in with Apple (iOS only) using a SHA-256-hashed nonce, then exchange the
+ * Apple identity token for a Firebase credential. Apple requires the *hashed*
+ * nonce; Firebase requires the matching *raw* nonce — a mismatch is rejected.
+ *
+ * Caller must gate this on Platform.OS === 'ios' && AppleAuthentication
+ * .isAvailableAsync(). User cancellation surfaces as a thrown error with code
+ * `ERR_REQUEST_CANCELED`, which callers swallow.
+ */
+export async function signInWithApple(): Promise<User> {
+  const rawNonce = bytesToHex(await Crypto.getRandomBytesAsync(16));
+  const hashedNonce = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    rawNonce
+  );
+
+  const appleCredential = await AppleAuthentication.signInAsync({
+    requestedScopes: [
+      AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+      AppleAuthentication.AppleAuthenticationScope.EMAIL,
+    ],
+    nonce: hashedNonce,
+  });
+
+  if (!appleCredential.identityToken) {
+    throw new Error('Apple sign-in did not return an identity token.');
+  }
+
+  const provider = new OAuthProvider('apple.com');
+  const credential = provider.credential({
+    idToken: appleCredential.identityToken,
+    rawNonce,
+  });
+  const userCredential = await signInWithCredential(auth, credential);
   return userCredential.user;
 }
 

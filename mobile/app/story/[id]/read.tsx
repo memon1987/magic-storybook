@@ -126,7 +126,7 @@ export default function ReadScreen() {
     setControlsVisible(true);
   };
 
-  // FC-029: tap only toggles the controls — it never navigates. Page turns are
+  // FC-035: tap only toggles the controls — it never navigates. Page turns are
   // the curl swipe (forward + backward); the dots row jumps to any page.
   const handleTap = () => setControlsVisible((v) => !v);
 

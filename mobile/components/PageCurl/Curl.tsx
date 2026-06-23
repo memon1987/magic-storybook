@@ -34,7 +34,7 @@ interface CurlProps {
   currentPage: number;
   totalPages: number;
   onPageChange: (newPage: number) => void;
-  // FC-029: tap is decoupled from navigation — it only toggles the reader
+  // FC-035: tap is decoupled from navigation — it only toggles the reader
   // controls. Page turns happen via the curl swipe (forward + backward).
   onTap: () => void;
 }
@@ -92,7 +92,7 @@ export function Curl({
   // Worklet-readable mirror of `direction`. The shader/gesture math runs on the
   // UI thread and can't read React state, so we drive it from this shared value
   // and keep `direction` in sync (one render per swipe) to swap the rendered
-  // curl/reveal images. See FC-029 plan: forward peels the CURRENT page to
+  // curl/reveal images. See FC-035 plan: forward peels the CURRENT page to
   // reveal NEXT; backward un-peels the PREVIOUS page over CURRENT.
   const isBackward = useSharedValue(false);
   const [direction, setDirection] = useState<Direction>('forward');

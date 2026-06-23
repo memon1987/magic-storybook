@@ -16,12 +16,14 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { GradientBackground } from '../../components/GradientBackground';
 import { SectionCard } from '../../components/SectionCard';
 import { AnimatedPressable } from '../../components/AnimatedPressable';
+import { SocialAuthButtons } from '../../components/SocialAuthButtons';
 
 export default function LoginScreen() {
   const { palette } = useTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [socialBusy, setSocialBusy] = useState(false);
   const { login } = useAuth();
 
   const handleLogin = async () => {
@@ -87,10 +89,10 @@ export default function LoginScreen() {
 
             <AnimatedPressable
               onPress={handleLogin}
-              disabled={isLoading}
+              disabled={isLoading || socialBusy}
               style={[
                 styles.primaryButton,
-                { backgroundColor: palette.colors.accent, opacity: isLoading ? 0.6 : 1 },
+                { backgroundColor: palette.colors.accent, opacity: isLoading || socialBusy ? 0.6 : 1 },
               ]}
             >
               <Text style={[styles.primaryButtonText, { color: '#FFFFFF' }]}>
@@ -98,23 +100,7 @@ export default function LoginScreen() {
               </Text>
             </AnimatedPressable>
 
-            <View style={styles.dividerRow}>
-              <View style={[styles.divider, { backgroundColor: `${palette.colors.textMuted}33` }]} />
-              <Text style={[styles.dividerText, { color: palette.colors.textMuted }]}>
-                Or continue with
-              </Text>
-              <View style={[styles.divider, { backgroundColor: `${palette.colors.textMuted}33` }]} />
-            </View>
-
-            <AnimatedPressable
-              onPress={() => Alert.alert('Coming soon', 'Google sign-in is on the way!')}
-              style={[styles.googleButton, { borderColor: `${palette.colors.textMuted}55` }]}
-            >
-              <Ionicons name="logo-google" size={18} color={palette.colors.textDark} />
-              <Text style={[styles.googleButtonText, { color: palette.colors.textDark }]}>
-                Continue with Google
-              </Text>
-            </AnimatedPressable>
+            <SocialAuthButtons parentBusy={isLoading} onBusyChange={setSocialBusy} />
           </SectionCard>
 
           <View style={styles.footer}>
@@ -195,33 +181,6 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     fontFamily: 'Nunito_700Bold',
     fontSize: 16,
-  },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginVertical: 18,
-  },
-  divider: {
-    flex: 1,
-    height: 1,
-  },
-  dividerText: {
-    fontFamily: 'Quicksand_500Medium',
-    fontSize: 12,
-  },
-  googleButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    height: 52,
-    borderRadius: 999,
-    borderWidth: 1,
-  },
-  googleButtonText: {
-    fontFamily: 'Nunito_600SemiBold',
-    fontSize: 15,
   },
   footer: {
     flexDirection: 'row',
