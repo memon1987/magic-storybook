@@ -39,20 +39,6 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ## Active Considerations
 
-### FC-022: Reader "The End" — move end card off the last story page
-
-**Status:** Plan published
-**Size estimate:** S
-**Owner:** Zeshan
-**Plan file:** `docs/plans/fc-022.md`
-
-**Problem / opportunity:** The story reader (`mobile/app/story/[id]/read.tsx`) renders the "The End" card as a full-screen scrim the instant the user reaches the last page (`isLastPage`), covering the final story page and making it unreadable. The ending should be a distinct beat, not an overlay on the last page.
-
-**Open questions (resolved in plan):**
-- Dedicated "The End" page vs. trigger card on over-scroll past the last page? → dedicated synthetic end page, mirroring the existing synthesized cover (page 0). The Curl only emits forward-commit events, so an over-scroll trigger would require inventing a new gesture event and is undiscoverable; a real page the user turns to is clean and reuses existing machinery.
-
----
-
 ### FC-003: Text-to-speech narration
 
 **Status:** Consideration
@@ -305,6 +291,13 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 ---
 
 ## Completed
+
+### FC-022: Reader "The End" — dedicated end page instead of last-page overlay — Done 2026-06-22
+
+The reader rendered the "The End" card as a full-screen dark scrim the instant the user reached the last page, covering the final story page and making it unreadable. Fixed by appending a synthetic image-less "The End" page (mirroring the synthesized cover at page 0): the user turns to it via the normal page-curl, the Curl paints it solid black, and the card + confetti now trigger on `isEndPage` — so the last *story* page has no overlay and is fully readable. Extracted the cover/end-aware page-counter logic into a pure helper (`components/PageCurl/paging.ts → readerPageLabel`); `usePageImages` coerces empty `imageUrl` → null so the end page never hits Skia's `useImage('')`. Rejected Option 2 (over-scroll trigger) — the Curl only emits forward-commit events, so it would require a new undiscoverable gesture. Adversarial review → APPROVE, no code changes required. `mobile/` has no test runner → follow-up **FC-024** filed.
+
+- **Plan:** [docs/plans/fc-022.md](plans/fc-022.md)
+- **PR:** [#27](https://github.com/memon1987/ai-storybook-app/pull/27) (squash-merged as `c5d5456`)
 
 ### FC-023: Reader orientation gate — stuck "rotate your device" overlay — Done 2026-06-22
 
