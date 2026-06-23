@@ -49,10 +49,13 @@ function clamp(value: number, min: number, max: number): number {
  */
 export function computeGrid(available: number, options: GridOptions = {}): GridSpec {
   const { target, gap, min, max } = { ...DEFAULT_GRID, ...options };
+  // Guard pathological widths (e.g. an iPad Slide Over / Stage Manager pane
+  // where insets can exceed width) so the column math never goes NaN/negative.
+  const safe = Math.max(0, available);
   // Solve N for: N*target + (N-1)*gap <= available  →  N = floor((avail+gap)/(target+gap))
-  const raw = Math.floor((available + gap) / (target + gap));
+  const raw = Math.floor((safe + gap) / (target + gap));
   const columns = clamp(raw, min, max);
-  const cellWidth = (available - gap * (columns - 1)) / columns;
+  const cellWidth = Math.max(0, (safe - gap * (columns - 1)) / columns);
   return { columns, cellWidth, gap };
 }
 
