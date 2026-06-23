@@ -24,13 +24,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // in-flight story docs. Backend writes to the `stories` collection; mobile
 // reads via Firestore Security Rules (gated to doc owner).
 import { getFirestore } from 'firebase/firestore';
-// FC-029: native Google account sheet + Apple Sign-In (iOS). Both acquire a
-// provider token natively, then exchange it for a Firebase credential via
-// signInWithCredential — the Firebase Web SDK's signInWithPopup/Redirect do
-// not work in React Native.
-import { GoogleSignin } from '@react-native-google-signin/google-signin';
-import * as AppleAuthentication from 'expo-apple-authentication';
-import * as Crypto from 'expo-crypto';
 
 const PLACEHOLDER_PATTERN = /^(your-|XXXX|0000)/;
 
@@ -110,19 +103,6 @@ export const auth = isNewApp
 // (only the doc's userId can read).
 export const db = getFirestore(app);
 
-// FC-029: configure the native Google Sign-In SDK once at module load.
-// Static literal process.env access so Metro inlines EXPO_PUBLIC_* at bundle
-// time (same rule as the RAW_ENV block above — dynamic access is NOT inlined).
-//
-// FOOTGUN: webClientId MUST be the *Web* OAuth client ID (the audience Firebase
-// validates), NOT the iOS client ID. Passing the iOS client yields a null
-// idToken from signIn() and the credential exchange fails. iosClientId is
-// iOS-only and ignored on Android.
-GoogleSignin.configure({
-  webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
-  iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
-});
-
 // Hex-encode random bytes for the Apple Sign-In nonce (see signInWithApple).
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -154,6 +134,24 @@ export async function signIn(email: string, password: string): Promise<User> {
  * sheet; callers swallow that without surfacing an alert.
  */
 export async function signInWithGoogle(): Promise<User> {
+  // Lazy import: @react-native-google-signin calls TurboModuleRegistry
+  // .getEnforcing at module-eval, which throws if the native module is absent
+  // (stale dev client). Loading it here instead of at the top of this module
+  // keeps email/password sign-in working when the native module is missing,
+  // and confines the crash to the user who actually taps "Continue with Google".
+  const { GoogleSignin } = await import('@react-native-google-signin/google-signin');
+
+  // Configure on each call (idempotent + cheap). Static literal process.env
+  // access so Metro inlines EXPO_PUBLIC_* at bundle time.
+  //
+  // FOOTGUN: webClientId MUST be the *Web* OAuth client ID (the audience
+  // Firebase validates), NOT the iOS client ID. Passing the iOS client yields a
+  // null idToken below. iosClientId is iOS-only and ignored on Android.
+  GoogleSignin.configure({
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+  });
+
   // Android requires Play Services; on iOS this no-ops. Throws if unavailable.
   await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
 
@@ -190,6 +188,12 @@ export async function signInWithGoogle(): Promise<User> {
  * `ERR_REQUEST_CANCELED`, which callers swallow.
  */
 export async function signInWithApple(): Promise<User> {
+  // Lazy import (see signInWithGoogle): expo-crypto uses requireNativeModule,
+  // which throws at module-eval if the native module is absent. Keep it out of
+  // this module's top level so email/password survives on a stale dev client.
+  const AppleAuthentication = await import('expo-apple-authentication');
+  const Crypto = await import('expo-crypto');
+
   const rawNonce = bytesToHex(await Crypto.getRandomBytesAsync(16));
   const hashedNonce = await Crypto.digestStringAsync(
     Crypto.CryptoDigestAlgorithm.SHA256,
