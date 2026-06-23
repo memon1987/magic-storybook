@@ -150,6 +150,14 @@ export function Curl({
 
   const imageRect = useMemo(() => Skia.XYWHRect(0, 0, width, height), [width, height]);
 
+  // Only reveal the next page while a curl is actually in progress (pointer has
+  // left origin). At rest the current page is drawn fit="contain" with
+  // transparent margins; without this gate the next page would bleed through
+  // those margins whenever adjacent pages differ in aspect ratio.
+  const nextOpacity = useDerivedValue(() =>
+    pointer.value < origin.value ? 1 : 0
+  );
+
   return (
     <GestureDetector gesture={composed}>
       <View style={[styles.container, { width, height }]}>
@@ -163,9 +171,12 @@ export function Curl({
           )}
 
           {/* Next page, revealed under the curl. Sharp + contain (never crops
-              baked text); its transparent margins reveal the ambient backdrop. */}
+              baked text). Hidden at rest (opacity 0) so it can't bleed through
+              the current page's transparent contain margins. */}
           {nextImage && (
-            <SkiaImage image={nextImage} rect={imageRect} fit="contain" />
+            <Group opacity={nextOpacity}>
+              <SkiaImage image={nextImage} rect={imageRect} fit="contain" />
+            </Group>
           )}
 
           {/* Current page curls away. Only the sharp contained image lives in
