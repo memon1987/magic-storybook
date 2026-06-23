@@ -97,10 +97,6 @@ export function Curl({
   const isBackward = useSharedValue(false);
   const [direction, setDirection] = useState<Direction>('forward');
 
-  const commitForward = () => onPageChange(currentPage + 1);
-  const commitBackward = () => onPageChange(currentPage - 1);
-  const setForward = () => setDirection('forward');
-
   useLayoutEffect(() => {
     // Canonical rest after any commit / resize: flat current page, forward mode.
     origin.value = width;
@@ -112,79 +108,95 @@ export function Curl({
   const canForward = currentPage < totalPages - 1;
   const canBackward = currentPage > 0;
 
-  const tap = Gesture.Tap()
-    .maxDistance(8)
-    .onEnd(() => {
-      runOnJS(onTap)();
-    });
+  // Gestures are memoized so the mid-swipe setDirection() re-render (which swaps
+  // the rendered curl/reveal images) does NOT recreate the gesture objects and
+  // drop the in-flight pan. `direction` is deliberately not a dependency.
+  const tap = useMemo(
+    () =>
+      Gesture.Tap()
+        .maxDistance(8)
+        .onEnd(() => {
+          runOnJS(onTap)();
+        }),
+    [onTap]
+  );
 
-  const pan = Gesture.Pan()
-    .maxPointers(1)
-    .activeOffsetX([-10, 10])
-    .onStart((e) => {
-      // activeOffsetX gates activation at ±10px, so translationX's sign here is
-      // the drag direction. Right drag = backward (bring previous page in).
-      const backward = e.translationX > 0;
-      isBackward.value = backward;
-      if (backward) {
-        // Backward: anchor origin at the right edge and drive pointer 0→width as
-        // the finger moves right, so the fold sweeps left→right and the previous
-        // page fills in from the left. Start flat (pointer=width) for one frame
-        // so the about-to-swap reveal image doesn't flash before `direction`
-        // updates.
-        origin.value = width;
-        pointer.value = width;
-      } else {
-        origin.value = e.x;
-        pointer.value = e.x;
-      }
-      runOnJS(setDirection)(backward ? 'backward' : 'forward');
-    })
-    .onChange((e) => {
-      if (isBackward.value) {
-        pointer.value = Math.max(0, Math.min(width, e.translationX));
-      } else {
-        pointer.value = Math.max(0, Math.min(origin.value, e.x));
-      }
-    })
-    .onEnd(() => {
-      if (isBackward.value) {
-        const progress = pointer.value / Math.max(1, width);
-        if (canBackward && progress > COMMIT_THRESHOLD_RATIO) {
-          pointer.value = withTiming(
-            width,
-            { duration: CURL_ANIMATION_MS, easing: Easing.out(Easing.cubic) },
-            (finished) => {
-              if (finished) runOnJS(commitBackward)();
+  const pan = useMemo(
+    () =>
+      Gesture.Pan()
+        .maxPointers(1)
+        .activeOffsetX([-10, 10])
+        .onStart((e) => {
+          // activeOffsetX gates activation at ±10px, so translationX's sign here
+          // is the drag direction. Right drag = backward (bring previous in).
+          const backward = e.translationX > 0;
+          isBackward.value = backward;
+          if (backward) {
+            // Backward: anchor origin at the right edge and drive pointer 0→width
+            // as the finger moves right, so the fold sweeps left→right and the
+            // previous page fills in from the left. Start flat (pointer=width)
+            // for one frame until `direction` swaps the rendered images.
+            origin.value = width;
+            pointer.value = width;
+          } else {
+            origin.value = e.x;
+            pointer.value = e.x;
+          }
+          runOnJS(setDirection)(backward ? 'backward' : 'forward');
+        })
+        .onChange((e) => {
+          if (isBackward.value) {
+            pointer.value = Math.max(0, Math.min(width, e.translationX));
+          } else {
+            pointer.value = Math.max(0, Math.min(origin.value, e.x));
+          }
+        })
+        .onEnd(() => {
+          if (isBackward.value) {
+            const progress = pointer.value / Math.max(1, width);
+            if (canBackward && progress > COMMIT_THRESHOLD_RATIO) {
+              pointer.value = withTiming(
+                width,
+                { duration: CURL_ANIMATION_MS, easing: Easing.out(Easing.cubic) },
+                (finished) => {
+                  if (finished) {
+                    isBackward.value = false;
+                    runOnJS(onPageChange)(currentPage - 1);
+                  }
+                }
+              );
+            } else {
+              // Cancel: peel the previous page back off to the left, then reset
+              // to forward rest (identity: origin=pointer ⇒ no curl). Resetting
+              // isBackward is essential — otherwise the reveal gate stays in
+              // backward mode and the next page bleeds through at rest.
+              pointer.value = withSpring(0, { damping: 18, stiffness: 200 }, (finished) => {
+                if (finished) {
+                  isBackward.value = false;
+                  origin.value = pointer.value;
+                  runOnJS(setDirection)('forward');
+                }
+              });
             }
-          );
-        } else {
-          // Cancel: peel the previous page back off to the left, then collapse
-          // to an identity rest (origin=pointer ⇒ no curl) showing current.
-          pointer.value = withSpring(0, { damping: 18, stiffness: 200 }, (finished) => {
-            if (finished) {
-              origin.value = pointer.value;
-              runOnJS(setForward)();
+          } else {
+            const progress = (origin.value - pointer.value) / Math.max(1, width);
+            if (canForward && progress > COMMIT_THRESHOLD_RATIO) {
+              pointer.value = withTiming(
+                0,
+                { duration: CURL_ANIMATION_MS, easing: Easing.out(Easing.cubic) },
+                (finished) => {
+                  if (finished) runOnJS(onPageChange)(currentPage + 1);
+                }
+              );
+            } else {
+              pointer.value = withSpring(origin.value, { damping: 18, stiffness: 200 });
             }
-          });
-        }
-      } else {
-        const progress = (origin.value - pointer.value) / Math.max(1, width);
-        if (canForward && progress > COMMIT_THRESHOLD_RATIO) {
-          pointer.value = withTiming(
-            0,
-            { duration: CURL_ANIMATION_MS, easing: Easing.out(Easing.cubic) },
-            (finished) => {
-              if (finished) runOnJS(commitForward)();
-            }
-          );
-        } else {
-          pointer.value = withSpring(origin.value, { damping: 18, stiffness: 200 });
-        }
-      }
-    });
+          }
+        }),
+    [width, canForward, canBackward, currentPage, onPageChange, isBackward, origin, pointer]
+  );
 
-  const composed = Gesture.Race(pan, tap);
+  const composed = useMemo(() => Gesture.Race(pan, tap), [pan, tap]);
 
   // Forward: current curls away, next revealed beneath. Backward: previous curls
   // in on top, current revealed beneath.
@@ -204,13 +216,21 @@ export function Curl({
 
   const imageRect = useMemo(() => Skia.XYWHRect(0, 0, width, height), [width, height]);
 
-  // Opacity for the sharp page revealed beneath the curl.
-  // Forward: show NEXT only while a curl is in progress (pointer left origin) —
-  // at rest the current page's transparent contain margins would otherwise let
-  // next bleed through (FC-026). Backward: CURRENT is the base page and must
-  // stay visible beneath the incoming previous page throughout the turn.
+  // Opacity for the sharp page revealed beneath the curl. Only show it while a
+  // curl is mid-transition; at rest the current page's transparent contain
+  // margins would otherwise let the revealed page bleed through (FC-026).
+  // Forward: reveal NEXT while pointer has left origin. Backward: reveal CURRENT
+  // (the base page) only while the previous page is partway across (0<pointer<
+  // width) — gating on `width` (not just `isBackward`) prevents a one-frame
+  // bleed at the backward-drag start where pointer is still width.
   const revealOpacity = useDerivedValue(() =>
-    isBackward.value ? 1 : pointer.value < origin.value ? 1 : 0
+    isBackward.value
+      ? pointer.value > 0 && pointer.value < width
+        ? 1
+        : 0
+      : pointer.value < origin.value
+        ? 1
+        : 0
   );
 
   return (
