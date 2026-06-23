@@ -290,6 +290,27 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
+### FC-025: FC-017 Phase 2 (PR #26) — adversarial-review remediation
+
+**Status:** Plan published (2026-06-22)
+**Size estimate:** M (mechanical fixes; recall is large but per-fix is small)
+**Owner:** Zeshan / Claude
+**Parent FC:** FC-017 Phase 2 (`docs/plans/fc-017.md`)
+**Plan file:** [docs/plans/fc-025.md](plans/fc-025.md)
+
+**Problem / opportunity:** PR #26 (FC-017 Phase 2: resumable story-generation pipeline) was opened without the adversarial peer review CLAUDE.md requires for plan-driven L work. Two independent post-hoc adversarial reviews (`/code-review max` + a fresh senior-SRE persona review) converged on REQUEST_CHANGES with **6 BLOCKER-class bugs** that would cause production data corruption or stuck stories within the first month of real user traffic, plus 8 HIGH and 6 MEDIUM findings. Both reviewers independently identified the same top bugs; Round 2 surfaced a 7th BLOCKER-tier `FieldValue.serverTimestamp()` nested-map footgun that Round 1 missed.
+
+**Sub-FC framing:** structurally a follow-up to FC-017 Phase 2, not its replacement. The architecture is sound; the bugs are implementation-level. Sub-FC keeps the remediation work traceable + ensures the confirmation review per CLAUDE.md actually happens before PR #26 merges.
+
+**Sequence:** BLOCKERs (6) → HIGHs in themed batches (privacy, lock correctness, telemetry restoration, operational) → MEDIUMs (defer or accept with rationale) → LOWs (opportunistic) → write the missing `__tests__/resume.test.ts` file the FC-017 plan §211 explicitly named → confirmation review. Merge gated on CONFIRMED-CLEAN.
+
+**Open questions (resolved in plan):**
+- B-6 fix flavor: castAttempted boolean field vs sentinel string? → boolean, clearer intent.
+- B-1 in-process dedup: return same result via shared Promise vs return 409 to second caller? → shared Promise; matches mobile double-tap UX.
+- Cloud Tasks reconsideration (architectural counter-argument Round 2 raised): out of scope here; file as separate FC if revisiting before Phase 3.
+
+---
+
 ## Completed
 
 ### FC-022: Reader "The End" — dedicated end page instead of last-page overlay — Done 2026-06-22
