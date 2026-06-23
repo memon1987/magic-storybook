@@ -37,6 +37,13 @@ const FAILURE_COPY: Record<FailureCode, string> = {
   unknown: 'Something unexpected happened.',
 };
 
+// FC-031 Change 6(b) — retry budget. After this many attempts on the
+// same story, Resume is replaced with a "try different inputs" + "Create
+// new story" CTA. Each attempt costs ~$0.50-$1.10 in Gemini calls; a
+// 3-attempt budget bounds the cost loop while still allowing recovery
+// from genuine transient failures (network blip, single Gemini 503).
+const MAX_RESUME_ATTEMPTS = 3;
+
 export default function GeneratingScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -45,21 +52,28 @@ export default function GeneratingScreen() {
   const [result, setResult] = useState<StorySubscriptionResult | null>(null);
   const [isResuming, setIsResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
-  // PR-29 HIGH-3: snapshot can fire multiple times; only auto-navigate ONCE
-  // per id. Without this guard, a status flip back to 'generating' (e.g.
-  // user hits Resume on a story we already navigated away from) would
-  // call router.replace again on a different screen.
-  const navigatedRef = useRef(false);
+  // FC-031 Change 2 — auto-navigate per (id, attempt). Previously a
+  // plain boolean reset only on `useEffect` remount (id change). After
+  // a Resume cycle that flows `generating → failed → Resume → complete`
+  // on the same screen instance, the boolean stayed true from the first
+  // (aborted) nav attempt → the 'complete' snapshot never triggered
+  // `router.replace` → user stuck on /generating with "Starting…"
+  // forever on a completed story. Tracking `attempt` (the worker
+  // increments it on every claim) lets a new run re-enable the nav.
+  const navigatedForAttemptRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!id) return;
-    navigatedRef.current = false;
+    navigatedForAttemptRef.current = null;
     const unsub = subscribeToStory(id, (next) => {
       setResult(next);
-      if (!('error' in next) && next.status === 'complete' && !navigatedRef.current) {
-        navigatedRef.current = true;
-        router.replace(`/story/${id}/read`);
-      }
+      if ('error' in next || next.status !== 'complete') return;
+      // Use the doc's current attempt (or 0 if absent — legacy stories)
+      // as the dedup key. New runs land at a new attempt → re-enabled.
+      const attempt = next.attempt ?? 0;
+      if (navigatedForAttemptRef.current === attempt) return;
+      navigatedForAttemptRef.current = attempt;
+      router.replace(`/story/${id}/read`);
     });
     return unsub;
   }, [id, router]);
@@ -118,27 +132,52 @@ export default function GeneratingScreen() {
     );
   }
 
-  // Terminal failure: show Resume + Back-to-library.
+  // Terminal failure: show Resume + Back-to-library (unless the retry
+  // budget is exhausted or the failure is safety-blocked — see below).
   if (result.status === 'failed') {
     const code = result.failureReason ?? 'unknown';
+    const attempt = result.attempt ?? 0;
+    // FC-031 Change 6(b) — retry budget. Two cases suppress Resume:
+    //   (1) safety_blocked: re-running the same prompt always fails the
+    //       same way. The right action is "Create a new story" with
+    //       different inputs.
+    //   (2) attempt >= MAX_RESUME_ATTEMPTS: the user has already burned
+    //       ~$1.50-$3.30 in Gemini calls. Stop the cost loop.
+    const budgetExhausted = attempt >= MAX_RESUME_ATTEMPTS;
+    const suppressResume = code === 'safety_blocked' || budgetExhausted;
+    const headline = code === 'safety_blocked'
+      ? FAILURE_COPY[code]
+      : budgetExhausted
+        ? `${FAILURE_COPY[code]} We’ve tried ${attempt} times — try different inputs.`
+        : FAILURE_COPY[code];
+    const onCreateNew = () => router.replace('/(tabs)/create');
     return (
       <GradientBackground colors={[palette.colors.background, palette.colors.secondary]}>
         <View style={styles.center}>
           <Animated.View entering={FadeIn} style={[styles.card, { backgroundColor: palette.colors.cardBg }]}>
             <Ionicons name="cloud-offline-outline" size={48} color={palette.colors.accent} />
-            <Text style={[styles.title, { color: palette.colors.textDark }]}>{FAILURE_COPY[code]}</Text>
+            <Text style={[styles.title, { color: palette.colors.textDark }]}>{headline}</Text>
             {resumeError && (
               <Text style={[styles.errorDetail, { color: palette.colors.textMuted }]}>{resumeError}</Text>
             )}
-            <AnimatedPressable
-              style={[styles.primaryButton, { backgroundColor: palette.colors.accent, opacity: isResuming ? 0.5 : 1 }]}
-              onPress={onResume}
-              disabled={isResuming}
-            >
-              <Text style={styles.primaryButtonText}>
-                {isResuming ? 'Starting…' : 'Try again'}
-              </Text>
-            </AnimatedPressable>
+            {suppressResume ? (
+              <AnimatedPressable
+                style={[styles.primaryButton, { backgroundColor: palette.colors.accent }]}
+                onPress={onCreateNew}
+              >
+                <Text style={styles.primaryButtonText}>Create a new story</Text>
+              </AnimatedPressable>
+            ) : (
+              <AnimatedPressable
+                style={[styles.primaryButton, { backgroundColor: palette.colors.accent, opacity: isResuming ? 0.5 : 1 }]}
+                onPress={onResume}
+                disabled={isResuming}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {isResuming ? 'Starting…' : 'Try again'}
+                </Text>
+              </AnimatedPressable>
+            )}
             <Pressable onPress={onBackToLibrary} style={styles.secondaryButton}>
               <Text style={[styles.secondaryButtonText, { color: palette.colors.textMuted }]}>Back to library</Text>
             </Pressable>

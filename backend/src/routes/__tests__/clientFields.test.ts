@@ -19,12 +19,15 @@ vi.hoisted(() => {
 
 import { pickClientFields, CLIENT_VISIBLE_DOC_FIELDS } from '../stories';
 
+// FC-031 Change 6(a): `attempt` was removed from this blocklist and added
+// to CLIENT_VISIBLE_DOC_FIELDS so mobile can enforce the retry budget
+// (cap auto-Resume at 3 attempts on a failed story). It's a simple
+// counter; not a privacy concern.
 const INTERNAL_FIELDS = [
   'workerId',
   'workerHeartbeatAt',
   'storyText',
   'pageUrls',
-  'attempt',
   'castAttempted',
   'titleAttempted',
 ] as const;
@@ -36,12 +39,12 @@ describe('pickClientFields (FC-025 H-2 + PR-29 MEDIUM-6)', () => {
       title: 'A Story',
       status: 'complete',
       pageCount: 5,
+      attempt: 3, // FC-031 Change 6(a): now allowlisted; sanity-checked separately below
       // Forbidden / internal fields below.
       workerId: 'storybook-api-00119-abc',
       workerHeartbeatAt: { _seconds: 1, _nanoseconds: 0 },
       storyText: { pages: [{ text: 'hi' }] },
       pageUrls: { '1': { url: 'x', ocrPassed: true, attempts: 1 } },
-      attempt: 3,
       castAttempted: true,
       titleAttempted: false,
     };
@@ -54,6 +57,9 @@ describe('pickClientFields (FC-025 H-2 + PR-29 MEDIUM-6)', () => {
     expect(clean.title).toBe('A Story');
     expect(clean.status).toBe('complete');
     expect(clean.pageCount).toBe(5);
+    // FC-031 Change 6(a): `attempt` is now part of the client-visible
+    // allowlist (mobile uses it for the retry budget). Was internal.
+    expect(clean.attempt).toBe(3);
   });
 
   it('drops keys that are present-but-undefined (Firestore null-vs-absent semantics)', () => {

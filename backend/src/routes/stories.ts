@@ -27,6 +27,14 @@ export const CLIENT_VISIBLE_DOC_FIELDS = [
   'authorStyle', 'writingStyle', 'length', 'artStyle', 'status', 'pageCount',
   'characterReferenceUrls', 'characterSheets', 'settingIdentity', 'titlePage',
   'titlePageImageUrl', 'castReferenceUrl', 'progress', 'failureReason',
+  // FC-031 Change 6(a) — mobile reads `attempt` to enforce the retry
+  // budget: after 3 attempts on a failed story, Resume is replaced with
+  // "Tried a few times — try different inputs" + "Create new story"
+  // CTA. Without this in the allowlist, mobile can't tell how many
+  // times the user has already tried, and a determined user can burn
+  // ~$0.50-$1.10/Resume in a tight cost loop. `attempt` is a simple
+  // counter; not a privacy concern.
+  'attempt',
 ] as const;
 
 // PR-29 MEDIUM-6: explicit allowlist filter. Tested in
@@ -214,10 +222,22 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       ? `${input.specialFriendDescription} named ${input.specialFriendName}`
       : input.favoriteAnimal || '';
 
-    // FC-017 Phase 3: write the initial doc with status='queued' + all inputs,
-    // then fire the worker in the background. Respond 202 with just the
-    // storyId so mobile can subscribe to the Firestore doc immediately. The
-    // worker handles claim, pipeline, persistence, and terminal status.
+    // FC-017 Phase 3 + FC-031 Change 3: write the initial doc with
+    // status='queued', all inputs, AND a populated `progress` field, then
+    // fire the worker in the background. Respond 202 with just the
+    // storyId so mobile can subscribe to the Firestore doc immediately.
+    // The worker handles claim, pipeline, persistence, and terminal status.
+    //
+    // FC-031 Change 3 — `progress` is populated synchronously at initial
+    // doc-write time. Without this, the very first snapshot mobile sees
+    // has `progress=undefined`, so the /generating screen shows the
+    // generic "Starting…" with no `updatedAt` until the worker writes
+    // its first per-phase progress (~5-15s later). That's a "silent
+    // queued" window where a hard worker death looks identical to
+    // normal startup for several minutes (until the orphan sweep notices).
+    // Populating progress synchronously eliminates the silent window
+    // and gives mobile a populated `progress.updatedAt` that the
+    // watchdog can advance-check.
     await storyRef.set({
       userId,
       status: 'queued',
@@ -234,6 +254,13 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       artStyle,
       attempt: 0,
       createdAt: FieldValue.serverTimestamp(),
+      progress: {
+        phase: 'story-text',
+        completedSteps: 0,
+        totalSteps: 1,
+        message: 'Starting…',
+        updatedAt: FieldValue.serverTimestamp(),
+      },
     });
 
     fireWorkerInBackground(storyId);

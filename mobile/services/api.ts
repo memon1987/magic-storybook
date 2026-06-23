@@ -140,6 +140,12 @@ export interface Story {
   progress?: GenerationProgress;
   failureReason?: FailureCode;
   createdAt: string;
+  // FC-031 Change 6(a): number of times the worker has been claimed on
+  // this doc (initial generate counts as 1; each Resume increments).
+  // Used by the /generating screen to enforce the retry budget — after
+  // 3 attempts on a failed story, Resume is replaced with "Try
+  // different inputs" + "Create new story" CTA.
+  attempt?: number;
 }
 
 // FC-017 Phase 3: POST /generate and POST /:id/resume now return 202 with
