@@ -16,6 +16,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { GradientBackground } from '../../components/GradientBackground';
 import { SectionCard } from '../../components/SectionCard';
 import { AnimatedPressable } from '../../components/AnimatedPressable';
+import { SocialAuthButtons } from '../../components/SocialAuthButtons';
 
 export default function RegisterScreen() {
   const { palette } = useTheme();
@@ -24,6 +25,7 @@ export default function RegisterScreen() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [socialBusy, setSocialBusy] = useState(false);
   const { signup } = useAuth();
 
   const handleRegister = async () => {
@@ -122,16 +124,18 @@ export default function RegisterScreen() {
 
             <AnimatedPressable
               onPress={handleRegister}
-              disabled={isLoading}
+              disabled={isLoading || socialBusy}
               style={[
                 styles.primaryButton,
-                { backgroundColor: palette.colors.accent, opacity: isLoading ? 0.6 : 1 },
+                { backgroundColor: palette.colors.accent, opacity: isLoading || socialBusy ? 0.6 : 1 },
               ]}
             >
               <Text style={[styles.primaryButtonText, { color: '#FFFFFF' }]}>
                 {isLoading ? 'Creating account…' : 'Create Account'}
               </Text>
             </AnimatedPressable>
+
+            <SocialAuthButtons parentBusy={isLoading} onBusyChange={setSocialBusy} />
           </SectionCard>
 
           <View style={styles.footer}>

@@ -19,7 +19,8 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       },
-      "buildNumber": "11"
+      "buildNumber": "11",
+      "usesAppleSignIn": true
     },
     "android": {
       "adaptiveIcon": {
@@ -36,7 +37,14 @@
     "plugins": [
       "expo-router",
       "expo-font",
-      "expo-screen-orientation"
+      "expo-screen-orientation",
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.REPLACE_WITH_REVERSED_IOS_CLIENT_ID"
+        }
+      ],
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": true

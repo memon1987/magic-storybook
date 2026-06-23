@@ -288,6 +288,15 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
+### FC-029: Social sign-in — Google + Apple
+
+**Status:** Executing
+**Size estimate:** M
+**Owner:** Zeshan
+**Plan file:** [docs/plans/fc-029.md](plans/fc-029.md)
+
+**Problem / opportunity:** The login screen's "Continue with Google" button was a `Alert.alert('Coming soon')` stub; register had no social option. Social sign-in lowers signup friction. We're on the Firebase **Web** JS SDK v11, whose `signInWithPopup`/`signInWithRedirect` don't work in React Native — so each provider acquires a token natively, then exchanges it via `signInWithCredential`. Google uses the native account sheet (`@react-native-google-signin/google-signin`); Apple uses `expo-apple-authentication` with a SHA-256 nonce. Because offering Google on iOS triggers App Store Guideline 4.8, **Sign in with Apple ships in the same FC** (iOS-only) so the next prod submission is compliant. Sessions persist via the existing `getReactNativePersistence` init (PR #32). Console setup (OAuth client IDs, provider enablement, Apple capability, Android SHA-1) is a prerequisite handoff; code lands with placeholder client IDs.
+
 ---
 
 ## Completed
