@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ViewStyle, StyleProp } from 'react-native';
+import { View, Text, StyleSheet, ViewStyle, StyleProp, ActivityIndicator } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { AnimatedPressable } from './AnimatedPressable';
@@ -19,6 +19,17 @@ export function StoryCard({ story, onPress, onLongPress, style }: StoryCardProps
   // generated before FC-012 shipped (which never got a titlePageImageUrl).
   const coverUrl = story.titlePageImageUrl ?? story.pages?.[0]?.imageUrl;
 
+  // FC-017 Phase 4: render non-complete states with status-specific
+  // affordances. Tap behavior is set by the parent (library navigates
+  // generating/queued/failed → /story/[id]/generating, complete → /read).
+  const isGenerating = story.status === 'generating' || story.status === 'queued';
+  const isFailed = story.status === 'failed';
+  const displayTitle = story.title?.trim()
+    ? story.title
+    : isFailed
+      ? `Couldn’t finish`
+      : `Story for ${story.childName}`;
+
   return (
     <AnimatedPressable
       onPress={() => onPress(story)}
@@ -30,7 +41,27 @@ export function StoryCard({ story, onPress, onLongPress, style }: StoryCardProps
           <Image source={{ uri: coverUrl }} style={styles.cover} contentFit="cover" />
         ) : (
           <View style={styles.placeholder}>
-            <Ionicons name="book" size={36} color={palette.colors.textMuted} />
+            <Ionicons
+              name={isFailed ? 'cloud-offline-outline' : 'book'}
+              size={36}
+              color={palette.colors.textMuted}
+            />
+          </View>
+        )}
+        {isGenerating && (
+          <View style={styles.statusOverlay}>
+            <View style={[styles.statusChip, { backgroundColor: palette.colors.accent }]}>
+              <ActivityIndicator size="small" color="#fff" />
+              <Text style={styles.statusChipText}>Generating…</Text>
+            </View>
+          </View>
+        )}
+        {isFailed && (
+          <View style={styles.statusOverlay}>
+            <View style={[styles.statusChip, { backgroundColor: palette.colors.accent }]}>
+              <Ionicons name="refresh" size={12} color="#fff" />
+              <Text style={styles.statusChipText}>Tap to retry</Text>
+            </View>
           </View>
         )}
       </View>
@@ -40,7 +71,7 @@ export function StoryCard({ story, onPress, onLongPress, style }: StoryCardProps
           style={[styles.title, { color: palette.colors.textDark }]}
           numberOfLines={2}
         >
-          {story.title}
+          {displayTitle}
         </Text>
 
         <View style={styles.metaRow}>
@@ -49,9 +80,19 @@ export function StoryCard({ story, onPress, onLongPress, style }: StoryCardProps
               {story.childName}
             </Text>
           </View>
-          <Text style={[styles.pages, { color: palette.colors.textMuted }]}>
-            {story.pageCount} pages
-          </Text>
+          {story.status === 'complete' && story.pageCount !== undefined && (
+            <Text style={[styles.pages, { color: palette.colors.textMuted }]}>
+              {story.pageCount} pages
+            </Text>
+          )}
+          {isGenerating && story.progress?.message && (
+            <Text
+              style={[styles.pages, { color: palette.colors.textMuted }]}
+              numberOfLines={1}
+            >
+              {story.progress.message}
+            </Text>
+          )}
         </View>
       </View>
     </AnimatedPressable>
@@ -109,5 +150,27 @@ const styles = StyleSheet.create({
   pages: {
     fontFamily: 'Quicksand_500Medium',
     fontSize: 11,
+    flex: 1,
+  },
+  // FC-017 Phase 4: status overlay sits at the bottom of the cover image.
+  statusOverlay: {
+    position: 'absolute',
+    bottom: 8,
+    left: 8,
+    right: 8,
+    alignItems: 'center',
+  },
+  statusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  statusChipText: {
+    fontFamily: 'Quicksand_600SemiBold',
+    fontSize: 11,
+    color: '#fff',
   },
 });

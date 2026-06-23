@@ -1,0 +1,38 @@
+rules_version = '2';
+
+// FC-017 Phase 3+4: mobile uses onSnapshot subscriptions to in-flight story
+// docs. The backend uses the Admin SDK (bypasses these rules); these rules
+// are strictly for the mobile / web Firebase JS SDK clients.
+//
+// Deploy via: firebase deploy --only firestore:rules --project ai-storybook-app-2025
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Stories collection: an authenticated user can read/write only their own docs.
+    // The backend Admin SDK bypasses these rules for create + per-phase updates;
+    // mobile only needs read access for the FC-017 generating-screen subscription.
+    match /stories/{storyId} {
+      allow read: if request.auth != null
+                  && resource != null
+                  && request.auth.uid == resource.data.userId;
+      // Mobile NEVER writes directly to story docs; all writes go through the
+      // backend (POST /generate, POST /:id/resume, DELETE /:id). Backend uses
+      // Admin SDK which is rule-exempt.
+      allow write: if false;
+
+      // Pages subcollection is also read-only from the client; backend
+      // populates at terminal success.
+      match /pages/{pageId} {
+        allow read: if request.auth != null
+                    && get(/databases/$(database)/documents/stories/$(storyId)).data.userId == request.auth.uid;
+        allow write: if false;
+      }
+    }
+
+    // Any other path: deny by default. Add explicit rules for new collections
+    // as they're introduced rather than leaving wildcard reads enabled.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

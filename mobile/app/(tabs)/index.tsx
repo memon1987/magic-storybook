@@ -46,21 +46,32 @@ export default function LibraryScreen() {
     },
   });
 
+  // FC-017 Phase 4: route by status. complete → reader; queued/generating/failed
+  // → generating screen (which subscribes to the doc and shows progress or the
+  // Resume affordance for failed).
   const handleStoryPress = useCallback(
-    (story: Story) => router.push(`/story/${story.id}/read`),
+    (story: Story) => {
+      if (story.status === 'complete') {
+        router.push(`/story/${story.id}/read`);
+      } else {
+        router.push(`/story/${story.id}/generating`);
+      }
+    },
     [router]
   );
 
   const handleStoryLongPress = useCallback(
-    (story: Story) =>
-      Alert.alert('Delete Story', `Remove "${story.title}" from your library?`, [
+    (story: Story) => {
+      const displayTitle = story.title?.trim() || `Story for ${story.childName}`;
+      Alert.alert('Delete Story', `Remove "${displayTitle}" from your library?`, [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
           onPress: () => deleteMutation.mutate(story.id),
         },
-      ]),
+      ]);
+    },
     [deleteMutation]
   );
 

@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import admin from 'firebase-admin';
 import storiesRouter from './routes/stories';
+import adminRouter from './routes/admin';
 
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
@@ -38,6 +39,9 @@ app.get('/health', (req, res) => {
 
 // API routes
 app.use('/api/stories', storiesRouter);
+// FC-017 Phase 4: admin endpoints invoked by Cloud Scheduler (token auth,
+// no user/Firebase-auth middleware). See routes/admin.ts.
+app.use('/api/admin', adminRouter);
 
 // 404 handler
 app.use((req, res) => {
