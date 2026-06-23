@@ -3,7 +3,7 @@ import { Firestore, FieldValue } from '@google-cloud/firestore';
 import { v4 as uuid } from 'uuid';
 import { authMiddleware } from '../middleware/auth';
 import { WRITING_STYLE_IDS } from '../prompts/story';
-import { runStoryWorker, LockHeldError, StoryNotResumableError } from '../services/worker';
+import { runStoryWorker, LockHeldError, StoryNotResumableError, WORKER_ID } from '../services/worker';
 import { storyTag, emitStageEvent } from '../services/instrumentation';
 import {
   AuthRequest,
@@ -85,27 +85,62 @@ function fireWorkerInBackground(storyId: string): void {
       storyId, stage: 'total', latencyMs: 0, outcome: 'failure',
       detail: { errorType: 'BackgroundWorkerError', message: err instanceof Error ? err.message : String(err) },
     });
-    // PR-29 confirmation-review LOW: re-read doc and skip the failed-write
-    // if status is already terminal. The worker's own catch writes
-    // status='failed' atomically on internal errors AND the success-path
-    // batch.commit writes status='complete' before runStoryWorker returns.
-    // If anything throws AFTER the terminal write (e.g. an instrumentation
-    // monkey-patch), this catch would otherwise overwrite a complete story
-    // with status='failed'. The re-read makes the update idempotent.
+    // FC-030 Change 4 — transactional catch. See `bgCatchMarkFailed` below
+    // for the predicate. Refuses to clobber a different live worker's
+    // `generating` state OR a terminal status, while still letting this
+    // process recover when its own worker's catch failed to write the
+    // terminal marker (confirmation-review MEDIUM-1).
     try {
-      const ref = db.collection('stories').doc(storyId);
-      const snap = await ref.get();
-      const current = snap.data()?.status;
-      if (current === 'complete' || current === 'failed') {
-        return;
-      }
-      await ref.update({
-        status: 'failed',
-        failureReason: 'unknown' as FailureCode,
-      });
+      await bgCatchMarkFailed(db, storyId);
     } catch (writeErr) {
       console.error(`${storyTag(storyId)} Could not mark doc failed after background error:`, writeErr);
     }
+  });
+}
+
+/**
+ * FC-030 — extracted bg-catch transaction body so tests exercise the
+ * production code path. Pure-ish: takes (db, storyId) and returns what
+ * the predicate decided.
+ *
+ * Predicate (write `status:'failed:unknown'` IFF none of these hold):
+ *   - Status is already terminal (`complete` / `failed`). Preserve it —
+ *     the worker's own catch may have written a more-specific
+ *     `failureReason` (e.g. `generation_error`, `quota_exceeded`).
+ *   - Status is `generating` AND `workerId` is set to a *different*
+ *     process's WORKER_ID. A live worker on another instance owns the
+ *     doc; it will write its own terminal state.
+ *
+ * Confirmation-review MEDIUM-1 fix: the predicate is `workerId !==
+ * WORKER_ID`, not just `workerId`. Without this, if this process's own
+ * worker's catch failed to write `status:'failed'` (transient Firestore
+ * blip during the worker.ts:451-460 update), the doc stays
+ * `status:'generating'` with this process's `workerId` set — the
+ * bg-catch's job is to recover that exact scenario, but a blind
+ * `if (workerId) return` would refuse and leave the user stuck for
+ * up to 10 minutes until the orphan sweep notices.
+ */
+export async function bgCatchMarkFailed(
+  db: Firestore,
+  storyId: string,
+): Promise<'wrote' | 'skipped-terminal' | 'skipped-other-worker' | 'skipped-missing'> {
+  const ref = db.collection('stories').doc(storyId);
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return 'skipped-missing' as const;
+    const data = snap.data() as Record<string, unknown>;
+    const status = data.status;
+    if (status === 'complete' || status === 'failed') {
+      return 'skipped-terminal' as const;
+    }
+    if (data.workerId && data.workerId !== WORKER_ID) {
+      return 'skipped-other-worker' as const;
+    }
+    tx.update(ref, {
+      status: 'failed',
+      failureReason: 'unknown' as FailureCode,
+    });
+    return 'wrote' as const;
   });
 }
 

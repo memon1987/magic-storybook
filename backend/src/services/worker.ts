@@ -59,7 +59,11 @@ const LOCK_STALE_THRESHOLD_MS = 90_000;
 // FC-025 L-2: full UUID instead of 8-char slice. Same module-scope binding
 // (one identity per process; combined with the per-storyId dedup Map below
 // this gives exactly-one-worker-per-story-per-process semantics).
-const WORKER_ID = `${process.env.K_REVISION ?? 'local'}-${uuid()}`;
+// FC-030: exported so `fireWorkerInBackground`'s transactional catch can
+// distinguish "another live worker owns the doc" (don't clobber) from
+// "my own process's worker just failed to clean up" (recover by writing
+// failed). The catch predicate is `workerId !== WORKER_ID`.
+export const WORKER_ID = `${process.env.K_REVISION ?? 'local'}-${uuid()}`;
 
 // FC-025 M-7: module-scope Firestore client. Previously instantiated inside
 // runStoryWorker on every call, leaking gRPC connection pools under
@@ -374,7 +378,17 @@ async function runStoryWorkerImpl(storyId: string): Promise<RunStoryWorkerResult
     const firestoreStart = Date.now();
     const batch = db.batch();
     story.pages.forEach((page, index) => {
-      const pageRef = storyRef.collection('pages').doc();
+      // FC-030 Change 1 — deterministic page-doc IDs. Was auto-id'd:
+      // any double-execution path (sweep ↔ takeover race, SIGTERM during
+      // this batch.commit, fire-and-forget bg-catch clobbering a healthy
+      // worker) produced TWO N-page sets in the subcollection, and the
+      // mobile reader (orders by pageNumber) rendered each page twice.
+      // With deterministic IDs scoped to (storyId, pageNumber), a second
+      // successful batch in a different lifetime writes the same docs
+      // with identical content — last-write-wins is benign. The reader
+      // queries by .orderBy('pageNumber'), so doc IDs don't matter to it.
+      // Existing complete stories (auto-id'd) are untouched.
+      const pageRef = storyRef.collection('pages').doc(String(page.pageNumber));
       batch.set(pageRef, {
         pageNumber: page.pageNumber,
         text: page.text,
@@ -479,12 +493,60 @@ async function runStoryWorkerImpl(storyId: string): Promise<RunStoryWorkerResult
 }
 
 /**
- * FC-025 H-10: SIGTERM handler. Cloud Run sends SIGTERM ~10s before
- * SIGKILL on scale-down. Best-effort: mark every in-flight story as
- * failed:sigterm so the next /resume isn't blocked by a stale-but-fresh
- * lock for up to 90s. Doesn't await Promise.all — runs in parallel with
- * a 5s deadline. Heartbeats already .unref()'d so the process can exit.
+ * FC-025 H-10 + FC-030 Change 3: SIGTERM handler. Cloud Run sends SIGTERM
+ * ~10s before SIGKILL on scale-down. Best-effort: mark every in-flight
+ * story as failed:sigterm so the next /resume isn't blocked by a stale-
+ * but-fresh lock for up to 90s.
+ *
+ * FC-030 Change 3 — uses a transaction that refuses to overwrite a
+ * terminal status. The previous blind `update` raced with the
+ * success-path `batch.commit`: if SIGTERM fired during the ~100-500ms
+ * batch.commit window, the SIGTERM handler's separate single-field
+ * update could land AFTER batch.commit, clobbering status='complete'
+ * with status='failed:sigterm'. The transaction's re-read closes that
+ * window. Combined with FC-030 Change 1 (deterministic page IDs), even
+ * if a race somehow sneaks through, resume is idempotent — no
+ * duplicate-pages corruption.
+ *
+ * Doesn't await Promise.all — runs in parallel with a 5s deadline.
+ * Heartbeats already .unref()'d so the process can exit.
  */
+/**
+ * FC-030 — extracted SIGTERM transaction body so tests can exercise the
+ * production code path against a Firestore double instead of an inline
+ * copy. Pure-ish: takes a (db, storyId) and returns a Promise that
+ * either writes the failed:sigterm marker OR aborts (no-op) when the
+ * doc is already terminal.
+ *
+ * Predicate: status not in {complete, failed} → write failed:sigterm.
+ * The complete/failed guard prevents:
+ *   - Clobbering a `complete` written by an in-flight success-path
+ *     batch.commit landing concurrently with SIGTERM (~100-500ms window).
+ *   - Clobbering a `failed` written by the worker's own catch with a
+ *     more-specific failureReason (generation_error/quota_exceeded/etc).
+ */
+export async function sigtermMarkFailed(
+  db: Firestore,
+  storyId: string,
+): Promise<'wrote' | 'skipped-terminal' | 'skipped-missing'> {
+  return db.runTransaction(async (tx) => {
+    const ref = db.collection('stories').doc(storyId);
+    const snap = await tx.get(ref);
+    if (!snap.exists) return 'skipped-missing' as const;
+    const data = snap.data() as Partial<StoryDocument>;
+    if (data.status === 'complete' || data.status === 'failed') {
+      return 'skipped-terminal' as const;
+    }
+    tx.update(ref, {
+      status: 'failed',
+      failureReason: 'sigterm' as FailureCode,
+      workerId: FieldValue.delete(),
+      workerHeartbeatAt: FieldValue.delete(),
+    });
+    return 'wrote' as const;
+  });
+}
+
 function installSigtermHandler(): void {
   let handled = false;
   process.on('SIGTERM', () => {
@@ -494,12 +556,7 @@ function installSigtermHandler(): void {
     if (ids.length === 0) return;
     console.warn(`[FC-017] SIGTERM received; marking ${ids.length} in-flight story/stories as failed:sigterm`);
     const writes = ids.map((id) =>
-      db.collection('stories').doc(id).update({
-        status: 'failed',
-        failureReason: 'sigterm' as FailureCode,
-        workerId: FieldValue.delete(),
-        workerHeartbeatAt: FieldValue.delete(),
-      }).catch((e) => {
+      sigtermMarkFailed(db, id).catch((e) => {
         console.warn(`[FC-017] SIGTERM cleanup failed for ${id}:`, e);
       }),
     );
