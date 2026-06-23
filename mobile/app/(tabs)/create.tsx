@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -16,13 +16,6 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Animated, {
   SlideInRight,
   SlideOutLeft,
-  useSharedValue,
-  useAnimatedStyle,
-  withRepeat,
-  withTiming,
-  Easing,
-  FadeIn,
-  FadeOut,
 } from 'react-native-reanimated';
 import {
   startStoryGeneration,
@@ -77,13 +70,6 @@ const ART_STYLE_OPTIONS: ArtStyleOption[] = [
   { value: 'claymation', label: 'Claymation', icon: 'cube-outline' },
   { value: 'studio-ghibli', label: 'Ghibli', icon: 'leaf-outline' },
   { value: 'pixar-3d', label: 'Pixar 3D', icon: 'star-outline' },
-];
-
-const GENERATING_MESSAGES = [
-  'Sprinkling some magic dust…',
-  'Drawing the illustrations…',
-  'Weaving the words together…',
-  'Adding the finishing touches…',
 ];
 
 interface FormData {
@@ -534,66 +520,11 @@ function ArtStyleStep({ value, onChange }: ArtStyleStepProps) {
   );
 }
 
-function GeneratingOverlay() {
-  const { palette } = useTheme();
-  const [messageIndex, setMessageIndex] = useState(0);
-  const rotate = useSharedValue(0);
-  const [progressTick, setProgressTick] = useState(0.05);
-
-  useEffect(() => {
-    rotate.value = withRepeat(
-      withTiming(360, { duration: 2400, easing: Easing.linear }),
-      -1,
-      false
-    );
-    const id = setInterval(
-      () => setMessageIndex((i) => (i + 1) % GENERATING_MESSAGES.length),
-      2200
-    );
-    const progressId = setInterval(() => {
-      setProgressTick((p) => p + (0.95 - p) * 0.04);
-    }, 1500);
-    return () => {
-      clearInterval(id);
-      clearInterval(progressId);
-    };
-  }, [rotate]);
-
-  const iconStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${rotate.value}deg` }],
-  }));
-
-  return (
-    <Animated.View
-      entering={FadeIn.duration(200)}
-      exiting={FadeOut.duration(200)}
-      style={StyleSheet.absoluteFill}
-    >
-      <GradientBackground colors={[palette.colors.background, palette.colors.secondary]}>
-        <View style={styles.overlayCenter}>
-          <Animated.View style={iconStyle}>
-            <Ionicons name="book" size={96} color={palette.colors.accent} />
-          </Animated.View>
-          <Text style={[styles.overlayTitle, { color: palette.colors.textDark }]}>
-            {GENERATING_MESSAGES[messageIndex]}
-          </Text>
-          <Text style={[styles.overlaySubtitle, { color: palette.colors.textMuted }]}>
-            This usually takes about a minute.
-          </Text>
-          <View style={styles.overlayProgressWrap}>
-            <ProgressBar
-              progress={progressTick}
-              trackColor={`${palette.colors.textMuted}33`}
-              fillColor={palette.colors.accent}
-              height={6}
-              duration={1500}
-            />
-          </View>
-        </View>
-      </GradientBackground>
-    </Animated.View>
-  );
-}
+// FC-017 Phase 3 (PR #29 confirmation-review cleanup): GeneratingOverlay
+// component removed entirely. Was used by the synchronous-await flow to
+// cover the ~3-5 min in-page wait; obsolete now that the mutation resolves
+// on a 202-ACK and the dedicated /story/[id]/generating screen handles
+// live progress. Dead imports + GENERATING_MESSAGES constant also dropped.
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
@@ -740,27 +671,5 @@ const styles = StyleSheet.create({
     fontFamily: 'Nunito_700Bold',
     fontSize: 16,
     color: '#FFFFFF',
-  },
-  overlayCenter: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-    gap: 16,
-  },
-  overlayTitle: {
-    fontFamily: 'Baloo2_700Bold',
-    fontSize: 22,
-    textAlign: 'center',
-    marginTop: 24,
-  },
-  overlaySubtitle: {
-    fontFamily: 'Quicksand_500Medium',
-    fontSize: 14,
-    textAlign: 'center',
-  },
-  overlayProgressWrap: {
-    width: '70%',
-    marginTop: 12,
   },
 });

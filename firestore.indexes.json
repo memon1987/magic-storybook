@@ -1,7 +1,6 @@
 {
   "indexes": [
     {
-      "_comment": "FC-017 Phase 4: GET /api/stories — list all stories for one user, newest first. Was (userId, status, createdAt) before list-route loosening; now status-agnostic.",
       "collectionGroup": "stories",
       "queryScope": "COLLECTION",
       "fields": [
@@ -10,7 +9,6 @@
       ]
     },
     {
-      "_comment": "FC-017 Phase 4: orphan-sweep query — stories whose worker died mid-flight. POST /api/admin/sweep-orphans.",
       "collectionGroup": "stories",
       "queryScope": "COLLECTION",
       "fields": [
@@ -19,7 +17,6 @@
       ]
     },
     {
-      "_comment": "FC-025/PR-29 HIGH-2: orphan-sweep query for stuck queued docs (worker never started). Companion to the previous index.",
       "collectionGroup": "stories",
       "queryScope": "COLLECTION",
       "fields": [

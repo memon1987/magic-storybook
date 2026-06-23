@@ -81,17 +81,25 @@ function fireWorkerInBackground(storyId: string): void {
     // here with no follow-up — the doc stayed `status='queued'` forever,
     // outside the orphan-sweep's `status='generating'` predicate. Mark the
     // doc failed explicitly so mobile's subscription sees it.
-    //
-    // Internal worker errors (inside its try block) already wrote
-    // status='failed' atomically — this update is a no-op merge in that case.
-    // We don't gate on "is this a worker-internal error" to keep the path
-    // simple and idempotent.
     emitStageEvent({
       storyId, stage: 'total', latencyMs: 0, outcome: 'failure',
       detail: { errorType: 'BackgroundWorkerError', message: err instanceof Error ? err.message : String(err) },
     });
+    // PR-29 confirmation-review LOW: re-read doc and skip the failed-write
+    // if status is already terminal. The worker's own catch writes
+    // status='failed' atomically on internal errors AND the success-path
+    // batch.commit writes status='complete' before runStoryWorker returns.
+    // If anything throws AFTER the terminal write (e.g. an instrumentation
+    // monkey-patch), this catch would otherwise overwrite a complete story
+    // with status='failed'. The re-read makes the update idempotent.
     try {
-      await db.collection('stories').doc(storyId).update({
+      const ref = db.collection('stories').doc(storyId);
+      const snap = await ref.get();
+      const current = snap.data()?.status;
+      if (current === 'complete' || current === 'failed') {
+        return;
+      }
+      await ref.update({
         status: 'failed',
         failureReason: 'unknown' as FailureCode,
       });
