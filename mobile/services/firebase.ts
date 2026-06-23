@@ -1,12 +1,22 @@
 import { initializeApp, getApps } from 'firebase/app';
 import {
   getAuth,
+  initializeAuth,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   User,
 } from 'firebase/auth';
+// getReactNativePersistence ships only in firebase's React Native build. The
+// `firebase/auth` meta-package exposes no `react-native` export condition for
+// its TYPES (only types/node/browser/default), so tsc resolves the web typings
+// where this symbol is absent — but Metro resolves the RN build at runtime, so
+// the call works. The @ts-expect-error self-cleans if firebase ever ships RN
+// typings here.
+// @ts-expect-error - RN-only export, missing from firebase/auth web typings
+import { getReactNativePersistence } from 'firebase/auth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 // FC-017 Phase 3+4: Firestore client for onSnapshot subscriptions to
 // in-flight story docs. Backend writes to the `stories` collection; mobile
 // reads via Firestore Security Rules (gated to doc owner).
@@ -61,8 +71,30 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase (only once)
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
-export const auth = getAuth(app);
+const isNewApp = getApps().length === 0;
+const app = isNewApp ? initializeApp(firebaseConfig) : getApps()[0];
+
+// Auth must be initialized with React Native persistence so the session
+// survives an app cold-start. The Firebase JS SDK defaults to in-memory
+// persistence on RN — without AsyncStorage-backed persistence the user is
+// silently logged out every time the OS tears down the process.
+//
+// initializeAuth() may only be called once per app; on Fast Refresh (or any
+// re-eval where the firebase app already exists) fall back to getAuth(), which
+// returns the already-configured instance.
+//
+// FRAGILITY NOTE: this guard keys off app existence, not auth-init state. It is
+// correct only because this module is the SOLE initializeApp() call site. If a
+// second site is ever added (e.g. firebase/messaging setup that runs first),
+// getApps() would already be non-empty here, the getAuth() branch would run
+// before persistence was wired, and the in-memory-logout bug would silently
+// return. Any new initializeApp() call must keep this the first one, or this
+// guard must be reworked to key off auth-initialization state.
+export const auth = isNewApp
+  ? initializeAuth(app, {
+      persistence: getReactNativePersistence(AsyncStorage),
+    })
+  : getAuth(app);
 // FC-017 Phase 3+4: shared Firestore client used by services/stories.ts
 // for onSnapshot subscriptions. Reads gated by Firestore Security Rules
 // (only the doc's userId can read).
