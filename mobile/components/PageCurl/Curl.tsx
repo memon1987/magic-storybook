@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useMemo } from 'react';
+import React, { useLayoutEffect, useMemo, useState } from 'react';
 import { View, PixelRatio, StyleSheet } from 'react-native';
 import {
   Canvas,
@@ -23,17 +23,20 @@ import {
 } from 'react-native-reanimated';
 import { pageCurl } from './pageCurl';
 
-export type TapZone = 'left' | 'center' | 'right';
+type Direction = 'forward' | 'backward';
 
 interface CurlProps {
   width: number;
   height: number;
   currentImage: SkImage | null;
   nextImage: SkImage | null;
+  previousImage: SkImage | null;
   currentPage: number;
   totalPages: number;
   onPageChange: (newPage: number) => void;
-  onTap: (zone: TapZone) => void;
+  // FC-035: tap is decoupled from navigation — it only toggles the reader
+  // controls. Page turns happen via the curl swipe (forward + backward).
+  onTap: () => void;
 }
 
 const CORNER_RADIUS = 0;
@@ -76,6 +79,7 @@ export function Curl({
   height,
   currentImage,
   nextImage,
+  previousImage,
   currentPage,
   totalPages,
   onPageChange,
@@ -85,57 +89,119 @@ export function Curl({
 
   const origin = useSharedValue(width);
   const pointer = useSharedValue(width);
-
-  const commitPage = () => onPageChange(currentPage + 1);
+  // Worklet-readable mirror of `direction`. The shader/gesture math runs on the
+  // UI thread and can't read React state, so we drive it from this shared value
+  // and keep `direction` in sync (one render per swipe) to swap the rendered
+  // curl/reveal images. See FC-035 plan: forward peels the CURRENT page to
+  // reveal NEXT; backward un-peels the PREVIOUS page over CURRENT.
+  const isBackward = useSharedValue(false);
+  const [direction, setDirection] = useState<Direction>('forward');
 
   useLayoutEffect(() => {
+    // Canonical rest after any commit / resize: flat current page, forward mode.
     origin.value = width;
     pointer.value = width;
-  }, [currentPage, width, origin, pointer]);
+    isBackward.value = false;
+    setDirection('forward');
+  }, [currentPage, width, origin, pointer, isBackward]);
 
-  const canCommitRef = currentPage < totalPages - 1;
+  const canForward = currentPage < totalPages - 1;
+  const canBackward = currentPage > 0;
 
-  const tap = Gesture.Tap()
-    .maxDistance(8)
-    .onEnd((e) => {
-      const zone: TapZone =
-        e.x < width * 0.25 ? 'left' : e.x > width * 0.75 ? 'right' : 'center';
-      runOnJS(onTap)(zone);
-    });
+  // Gestures are memoized so the mid-swipe setDirection() re-render (which swaps
+  // the rendered curl/reveal images) does NOT recreate the gesture objects and
+  // drop the in-flight pan. `direction` is deliberately not a dependency.
+  const tap = useMemo(
+    () =>
+      Gesture.Tap()
+        .maxDistance(8)
+        .onEnd(() => {
+          runOnJS(onTap)();
+        }),
+    [onTap]
+  );
 
-  const pan = Gesture.Pan()
-    .maxPointers(1)
-    .activeOffsetX([-10, 10])
-    .onStart((e) => {
-      origin.value = e.x;
-      pointer.value = e.x;
-    })
-    .onChange((e) => {
-      pointer.value = Math.max(0, Math.min(origin.value, e.x));
-    })
-    .onEnd(() => {
-      const progress = (origin.value - pointer.value) / Math.max(1, width);
-      const shouldCommit = canCommitRef && progress > COMMIT_THRESHOLD_RATIO;
-
-      if (shouldCommit) {
-        pointer.value = withTiming(
-          0,
-          { duration: CURL_ANIMATION_MS, easing: Easing.out(Easing.cubic) },
-          (finished) => {
-            if (finished) {
-              runOnJS(commitPage)();
+  const pan = useMemo(
+    () =>
+      Gesture.Pan()
+        .maxPointers(1)
+        .activeOffsetX([-10, 10])
+        .onStart((e) => {
+          // activeOffsetX gates activation at ±10px, so translationX's sign here
+          // is the drag direction. Right drag = backward (bring previous in).
+          const backward = e.translationX > 0;
+          isBackward.value = backward;
+          if (backward) {
+            // Backward: anchor origin at the right edge and drive pointer 0→width
+            // as the finger moves right, so the fold sweeps left→right and the
+            // previous page fills in from the left. Start flat (pointer=width)
+            // for one frame until `direction` swaps the rendered images.
+            origin.value = width;
+            pointer.value = width;
+          } else {
+            origin.value = e.x;
+            pointer.value = e.x;
+          }
+          runOnJS(setDirection)(backward ? 'backward' : 'forward');
+        })
+        .onChange((e) => {
+          if (isBackward.value) {
+            pointer.value = Math.max(0, Math.min(width, e.translationX));
+          } else {
+            pointer.value = Math.max(0, Math.min(origin.value, e.x));
+          }
+        })
+        .onEnd(() => {
+          if (isBackward.value) {
+            const progress = pointer.value / Math.max(1, width);
+            if (canBackward && progress > COMMIT_THRESHOLD_RATIO) {
+              pointer.value = withTiming(
+                width,
+                { duration: CURL_ANIMATION_MS, easing: Easing.out(Easing.cubic) },
+                (finished) => {
+                  if (finished) {
+                    isBackward.value = false;
+                    runOnJS(onPageChange)(currentPage - 1);
+                  }
+                }
+              );
+            } else {
+              // Cancel: peel the previous page back off to the left, then reset
+              // to forward rest (identity: origin=pointer ⇒ no curl). Resetting
+              // isBackward is essential — otherwise the reveal gate stays in
+              // backward mode and the next page bleeds through at rest.
+              pointer.value = withSpring(0, { damping: 18, stiffness: 200 }, (finished) => {
+                if (finished) {
+                  isBackward.value = false;
+                  origin.value = pointer.value;
+                  runOnJS(setDirection)('forward');
+                }
+              });
+            }
+          } else {
+            const progress = (origin.value - pointer.value) / Math.max(1, width);
+            if (canForward && progress > COMMIT_THRESHOLD_RATIO) {
+              pointer.value = withTiming(
+                0,
+                { duration: CURL_ANIMATION_MS, easing: Easing.out(Easing.cubic) },
+                (finished) => {
+                  if (finished) runOnJS(onPageChange)(currentPage + 1);
+                }
+              );
+            } else {
+              pointer.value = withSpring(origin.value, { damping: 18, stiffness: 200 });
             }
           }
-        );
-      } else {
-        pointer.value = withSpring(origin.value, {
-          damping: 18,
-          stiffness: 200,
-        });
-      }
-    });
+        }),
+    [width, canForward, canBackward, currentPage, onPageChange, isBackward, origin, pointer]
+  );
 
-  const composed = Gesture.Race(pan, tap);
+  const composed = useMemo(() => Gesture.Race(pan, tap), [pan, tap]);
+
+  // Forward: current curls away, next revealed beneath. Backward: previous curls
+  // in on top, current revealed beneath.
+  const curlImage = direction === 'backward' ? previousImage : currentImage;
+  const revealImage = direction === 'backward' ? currentImage : nextImage;
 
   const uniforms = useDerivedValue(
     () => ({
@@ -150,12 +216,21 @@ export function Curl({
 
   const imageRect = useMemo(() => Skia.XYWHRect(0, 0, width, height), [width, height]);
 
-  // Only reveal the next page while a curl is actually in progress (pointer has
-  // left origin). At rest the current page is drawn fit="contain" with
-  // transparent margins; without this gate the next page would bleed through
-  // those margins whenever adjacent pages differ in aspect ratio.
-  const nextOpacity = useDerivedValue(() =>
-    pointer.value < origin.value ? 1 : 0
+  // Opacity for the sharp page revealed beneath the curl. Only show it while a
+  // curl is mid-transition; at rest the current page's transparent contain
+  // margins would otherwise let the revealed page bleed through (FC-026).
+  // Forward: reveal NEXT while pointer has left origin. Backward: reveal CURRENT
+  // (the base page) only while the previous page is partway across (0<pointer<
+  // width) — gating on `width` (not just `isBackward`) prevents a one-frame
+  // bleed at the backward-drag start where pointer is still width.
+  const revealOpacity = useDerivedValue(() =>
+    isBackward.value
+      ? pointer.value > 0 && pointer.value < width
+        ? 1
+        : 0
+      : pointer.value < origin.value
+        ? 1
+        : 0
   );
 
   return (
@@ -170,18 +245,19 @@ export function Curl({
             <AmbientBackdrop image={currentImage} rect={imageRect} width={width} height={height} />
           )}
 
-          {/* Next page, revealed under the curl. Sharp + contain (never crops
-              baked text). Hidden at rest (opacity 0) so it can't bleed through
-              the current page's transparent contain margins. */}
-          {nextImage && (
-            <Group opacity={nextOpacity}>
-              <SkiaImage image={nextImage} rect={imageRect} fit="contain" />
+          {/* Sharp page revealed beneath the curl (forward: next, backward:
+              current). Contain so baked text is never cropped; opacity-gated so
+              it can't bleed through the curling page's transparent margins. */}
+          {revealImage && (
+            <Group opacity={revealOpacity}>
+              <SkiaImage image={revealImage} rect={imageRect} fit="contain" />
             </Group>
           )}
 
-          {/* Current page curls away. Only the sharp contained image lives in
-              the shader layer — the backdrop stays behind it (see above). */}
-          {currentImage && (
+          {/* The curling page (forward: current peels away; backward: previous
+              peels in). Only the sharp contained image lives in the shader
+              layer — the ambient backdrop stays behind it (see above). */}
+          {curlImage && (
             <Group transform={[{ scale: 1 / pd }]}>
               <Group
                 layer={
@@ -191,7 +267,7 @@ export function Curl({
                 }
                 transform={[{ scale: pd }]}
               >
-                <SkiaImage image={currentImage} rect={imageRect} fit="contain" />
+                <SkiaImage image={curlImage} rect={imageRect} fit="contain" />
               </Group>
             </Group>
           )}

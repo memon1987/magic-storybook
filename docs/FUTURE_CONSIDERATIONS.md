@@ -364,6 +364,19 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
+### FC-035: Reader — decouple tap from navigation + backward page-curl
+
+**Status:** Executing
+**Size estimate:** M
+**Owner:** Zeshan
+**Plan file:** [docs/plans/fc-035.md](plans/fc-035.md)
+
+_(Implemented/reviewed under the label "FC-029"; renumbered to FC-035 after a concurrent session merged its own FC-029 — Google/Apple social sign-in — first. Branch `feature/fc-029-reader-tap-backward-curl` / PR #33 / git history keep the old label.)_
+
+**Problem / opportunity:** In the reader, tapping was overloaded — it toggled the info bars AND navigated via hard-coded zones (left 25% = prev, right 25% = next, center 50% = toggle), so a tap meant to reveal the bars frequently landed in an edge zone and accidentally flipped the page (reported on build 11). Fix: (1) a tap anywhere only toggles the controls — never navigates; (2) add a backward page-curl swipe (the curl was forward-only). Reuses the existing GLSL shader for backward (curl-layer top = previous image, `pointer` 0→width sweeps the fold left→right so the previous page enters from the left). Two files: `Curl.tsx`, `read.tsx`.
+
+---
+
 ## Completed
 
 ### FC-017: Story generation reliability — request resumes / async job model — Done 2026-06-23
