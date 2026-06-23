@@ -299,6 +299,71 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
+### FC-030: FC-017 corruption-class hotfix — deterministic page IDs + sweep transactional re-read + SIGTERM-aware finalize + transactional bg-catch
+
+**Status:** Draft
+**Size estimate:** M
+**Owner:** Zeshan
+**Plan file:** [docs/plans/fc-030.md](plans/fc-030.md)
+**Parent FC:** FC-017 (`docs/plans/fc-017.md`)
+**Investigation:** [docs/investigations/fc-017-retrospective-2026-06-23.md](investigations/fc-017-retrospective-2026-06-23.md)
+
+**Problem / opportunity:** The 2026-06-23 system-level retrospective adversarial review found 3 distributed-systems BLOCKERs in FC-017 Phase 2/3/4 that all per-PR reviews structurally missed. Common failure: duplicate page docs in the `stories/{id}/pages` subcollection under any double-execution path (sweep ↔ takeover race, SIGTERM during success-batch, bg-catch clobbering a healthy worker). Auto-id'd page-doc references at [worker.ts:377](plans/../backend/src/services/worker.ts) make the success-path `batch.commit` non-idempotent. Mobile reader renders every page twice. Single highest-leverage fix: deterministic page IDs (1 LOC). Defense-in-depth: sweep transactional re-read + SIGTERM-aware finalize + transactional bg-catch.
+
+---
+
+### FC-031: FC-017 mobile hardening — library live-update + navigatedRef fix + retry budget + permission_denied recovery + watchdog
+
+**Status:** Draft
+**Size estimate:** M
+**Owner:** Zeshan
+**Plan file:** [docs/plans/fc-031.md](plans/fc-031.md)
+**Parent FC:** FC-017 (`docs/plans/fc-017.md`)
+**Investigation:** [docs/investigations/fc-017-retrospective-2026-06-23.md](investigations/fc-017-retrospective-2026-06-23.md)
+
+**Problem / opportunity:** The 2026-06-23 retrospective's mobile state-machine reviewer found 4 HIGHs in Phase 4 mobile, including one that directly contradicts the FC-017 plan's user promise: the library tab shows stale generating-status forever because it has no Firestore subscription or `refetchInterval`. Also: `navigatedRef` strands the user on `/generating` after a Resume-then-success cycle; no client-side watchdog leaves the user on "Starting…" for up to 15 min before the sweep flips the doc; `permission_denied` is unrecoverable without app-kill; no retry budget so a `safety_blocked` failure burns ~$0.50-$1.10/Resume cycle in a tight loop. Scope: backend touchpoints (initial-progress populate + allowlist `attempt`) + all mobile changes in one PR. Ships to TestFlight via the next EAS build.
+
+---
+
+### FC-032: FC-017 ops floor baseline — Firestore PITR + daily backups + pin `--max-instances` + alerting + CI test gate + OIDC sweep auth + runbooks
+
+**Status:** Draft
+**Size estimate:** L
+**Owner:** Zeshan
+**Plan file:** [docs/plans/fc-032.md](plans/fc-032.md)
+**Parent FC:** FC-017 (`docs/plans/fc-017.md`)
+**Investigation:** [docs/investigations/fc-017-retrospective-2026-06-23.md](investigations/fc-017-retrospective-2026-06-23.md)
+
+**Problem / opportunity:** The 2026-06-23 retrospective's cloud-ops reviewer found that FC-017's data-layer + distributed-systems work is sound, but **the operational posture surrounding it is essentially zero**: no Firestore backups, no PITR; `--max-instances=20` not pinned in `cloudbuild.yaml` (a future deploy silently regresses to default 1000); zero alerting / monitoring; Cloud Scheduler doesn't actually retry on failure; secret rotation broken-by-default; static bearer token readable to any Project Viewer; CI runs no tests before deploy; zero runbooks. Ships in 3 PRs to stay rollback-friendly: static config + runbooks first; OIDC backend (additive); OIDC cutover + static-bearer removal.
+
+---
+
+### FC-033: Firestore emulator + integration tests for FC-017 concurrency-critical paths
+
+**Status:** Consideration
+**Size estimate:** M
+**Owner:** unassigned
+**Plan file:** not yet
+**Parent FC:** FC-017
+**Source:** R1 MEDIUM-3 from [docs/investigations/fc-017-retrospective-2026-06-23.md](investigations/fc-017-retrospective-2026-06-23.md)
+
+**Problem / opportunity:** FC-030 ships with light-weight mocked-Firestore tests for the corruption-hotfix paths. The deeper distributed-systems guarantees (claimLock contention under N concurrent workers, sweep race window narrowing, heartbeat lifecycle under fake-clock pressure) need a real Firestore emulator. Estimated ~1 day of test infra. Defer until the next time a concurrency regression surfaces or before any further FC touches the worker state machine.
+
+---
+
+### FC-034: Cloud Monitoring dashboard + log-based metrics for FC-017 instrumentation
+
+**Status:** Consideration
+**Size estimate:** S-M
+**Owner:** unassigned
+**Plan file:** not yet
+**Parent FC:** FC-017
+**Source:** R3 M-2 from [docs/investigations/fc-017-retrospective-2026-06-23.md](investigations/fc-017-retrospective-2026-06-23.md)
+
+**Problem / opportunity:** Phase 1's `emitStageEvent`/`emitCallEvent` structured JSON lands in Cloud Logging via `console.log(JSON.stringify(...))` and is never read. FC-032 ships *failure*-detection alerts but not *latency*-distribution charts. A Cloud Monitoring dashboard with log-based-metrics extracting `latencyMs` by stage + `outcome=failure` counts by stage closes the gap between "instrumentation captured" and "instrumentation observed." Defer until the first incident triage where the absence of a dashboard would have made things faster.
+
+---
+
 ## Completed
 
 ### FC-017: Story generation reliability — request resumes / async job model — Done 2026-06-23
