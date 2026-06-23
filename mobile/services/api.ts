@@ -9,14 +9,18 @@ if (!API_URL || /XXXX/.test(API_URL)) {
 }
 
 // Create axios instance
+//
+// FC-017 Phase 3: timeout dropped from 600s → 30s. The backend now responds
+// 202 immediately to `/generate` and `/:id/resume` (after only the initial
+// doc write + sync auth/ownership check, ~100-500ms). Mobile subscribes to
+// the Firestore story doc for live progress and terminal status via
+// services/stories.ts → subscribeToStory(). The 600s timeout was the
+// vector for the silent-success bug: backend kept running past timeout,
+// finished, and saved the story — user saw a hard error and the story
+// silently appeared on next library refresh.
 const api: AxiosInstance = axios.create({
   baseURL: API_URL,
-  // 10 min. This CLIENT timeout is the binding ceiling for synchronous story
-  // generation — the backend (Cloud Run) allows up to 3600s, so if this fires
-  // the server keeps running, finishes, and saves the story to Firestore even
-  // though the client surfaced an error (the story appears in the library on
-  // next load). FC-017 (async job model) is the durable fix.
-  timeout: 600000,
+  timeout: 30_000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -85,9 +89,36 @@ export interface StoryTitlePage {
   sceneDescription: string;
 }
 
+// FC-017 Phase 3+4: stories can be in any of these states. The library
+// renders distinct affordances per status.
+export type StoryStatus = 'queued' | 'generating' | 'complete' | 'failed';
+
+// FC-017 / FC-025 H-1: bounded set of failure codes safe to surface to the
+// client. Raw upstream errors never reach this field — server logs only.
+// Keep in sync with backend/src/types/index.ts FailureCode.
+export type FailureCode =
+  | 'generation_error'
+  | 'network_error'
+  | 'quota_exceeded'
+  | 'safety_blocked'
+  | 'sigterm'
+  | 'orphaned'
+  | 'unknown';
+
+// FC-017 Phase 4: per-stage progress for live UX. Backend renders the
+// `message` string; mobile is a dumb subscriber. `updatedAt` comes from
+// Firestore as a Timestamp or from HTTP-JSON as an ISO string; we don't
+// render it.
+export interface GenerationProgress {
+  phase: 'story-text' | 'char-refs' | 'cast' | 'title' | 'anchor-pages' | 'parallel-pages' | 'finalizing';
+  completedSteps: number;
+  totalSteps: number;
+  message: string;
+}
+
 export interface Story {
   id: string;
-  title: string;
+  title?: string;                    // FC-017: optional — absent until status='complete'
   childName: string;
   childGender?: 'boy' | 'girl';
   favoriteAnimal: string;
@@ -98,26 +129,47 @@ export interface Story {
   authorStyle?: string;
   writingStyle?: WritingStyleId;
   artStyle: ArtStyle;
-  pageCount: number;
+  pageCount?: number;                // FC-017: optional — absent until status='complete'
   pages?: StoryPage[];
   // FC-012: cover image + cover scene description, distinct from content pages.
   // Optional for backwards-compatibility with stories generated pre-FC-012.
   titlePageImageUrl?: string;
   titlePage?: StoryTitlePage;
+  // FC-017 Phase 3+4: live state surfaced via list/get and Firestore snapshot.
+  status: StoryStatus;
+  progress?: GenerationProgress;
+  failureReason?: FailureCode;
   createdAt: string;
 }
 
-export interface GenerateStoryResponse extends Story {
-  generationTimeMs: number;
+// FC-017 Phase 3: POST /generate and POST /:id/resume now return 202 with
+// just `{ storyId, status }` — mobile subscribes to the Firestore doc for
+// terminal status. The full assembled story arrives via the snapshot (or
+// via getStory(id) once status='complete').
+export interface AcceptedStoryResponse {
+  storyId: string;
+  status: StoryStatus;
 }
 
 // API Functions
 
 /**
- * Generate a new story
+ * FC-017 Phase 3: kick off story generation. Returns immediately with the
+ * storyId; the caller should navigate to the generating screen and
+ * subscribe via subscribeToStory(storyId) for live progress.
  */
-export async function generateStory(input: StoryInput): Promise<GenerateStoryResponse> {
-  const response = await api.post<GenerateStoryResponse>('/api/stories/generate', input);
+export async function startStoryGeneration(input: StoryInput): Promise<AcceptedStoryResponse> {
+  const response = await api.post<AcceptedStoryResponse>('/api/stories/generate', input);
+  return response.data;
+}
+
+/**
+ * FC-017 Phase 3: re-fire the worker for a story whose prior run died
+ * mid-flight or was marked failed. Same 202 + subscribe pattern as
+ * startStoryGeneration. Backend validates auth + ownership synchronously.
+ */
+export async function resumeStory(id: string): Promise<AcceptedStoryResponse> {
+  const response = await api.post<AcceptedStoryResponse>(`/api/stories/${id}/resume`);
   return response.data;
 }
 

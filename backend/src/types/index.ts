@@ -178,6 +178,7 @@ export type FailureCode =
   | 'quota_exceeded'
   | 'safety_blocked'
   | 'sigterm'
+  | 'orphaned'      // FC-017 Phase 4: marked failed by the orphan-sweep cron
   | 'unknown';
 
 // Page document in Firestore (subcollection)

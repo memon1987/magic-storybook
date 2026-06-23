@@ -25,7 +25,7 @@ import Animated, {
   FadeOut,
 } from 'react-native-reanimated';
 import {
-  generateStory,
+  startStoryGeneration,
   ArtStyle,
   StoryLength,
   StoryInput,
@@ -117,15 +117,21 @@ export default function CreateScreen() {
   const [stepIndex, setStepIndex] = useState(0);
   const [formData, setFormData] = useState<FormData>(INITIAL_FORM);
 
+  // FC-017 Phase 3: mutation now resolves on the 202-ACK (~100-500ms),
+  // not on the full ~3-5 min generation. Navigate to the live-progress
+  // /story/[id]/generating screen which subscribes to the Firestore doc
+  // for terminal status. This eliminates the silent-success bug: the
+  // user-visible "did the story finish?" signal is the doc, not the
+  // axios timeout.
   const mutation = useMutation({
-    mutationFn: (input: StoryInput) => generateStory(input),
+    mutationFn: (input: StoryInput) => startStoryGeneration(input),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['stories'] });
-      router.replace(`/story/${data.id}/read`);
+      router.replace(`/story/${data.storyId}/generating`);
     },
     onError: (error) => {
-      const message = error instanceof Error ? error.message : 'Failed to generate story';
-      Alert.alert('Generation failed', message);
+      const message = error instanceof Error ? error.message : 'Failed to start generation';
+      Alert.alert('Failed to start', message);
     },
   });
 

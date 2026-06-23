@@ -43,8 +43,38 @@ const db = new Firestore();
 router.use(authMiddleware);
 
 /**
+ * FC-017 Phase 3 helper: fire the worker in the background without awaiting.
+ * The route returns 202 immediately; the worker writes its own terminal
+ * status (`complete` or `failed`) to the Firestore doc, which mobile observes
+ * via onSnapshot. Pre-claim failures (LockHeldError, StoryNotResumableError)
+ * thrown synchronously inside `runStoryWorker` before its try block can't be
+ * caught by the worker — emit their `total` stage_event here. Internal worker
+ * errors are already emitted by worker.ts itself; don't double-emit.
+ *
+ * Requires Cloud Run `--no-cpu-throttling` so the worker keeps running after
+ * `res.send()`. Verified at `gcloud run services describe storybook-api`
+ * before this PR shipped; revision storybook-api-00119-h6d+ have it set.
+ */
+function fireWorkerInBackground(storyId: string): void {
+  runStoryWorker(storyId).catch((err) => {
+    console.error(`${storyTag(storyId)} Background worker rejected:`, err);
+    if (err instanceof LockHeldError) {
+      emitStageEvent({ storyId, stage: 'total', latencyMs: 0, outcome: 'failure', detail: { errorType: 'LockHeldError' } });
+    } else if (err instanceof StoryNotResumableError) {
+      emitStageEvent({ storyId, stage: 'total', latencyMs: 0, outcome: 'failure', detail: { errorType: 'StoryNotResumableError', reason: err.reason } });
+    }
+    // Internal worker errors (everything inside its try block) already emitted
+    // a `total` failure stage_event from the worker's catch + wrote
+    // status='failed' + failureReason to the doc. The mobile snapshot
+    // subscription will see that.
+  });
+}
+
+/**
  * POST /api/stories/generate
- * Generate a new story with illustrations
+ * FC-017 Phase 3: returns 202 with `{ storyId, status: 'queued' }` immediately
+ * after the initial-doc write; mobile subscribes to the doc via onSnapshot
+ * for live progress + terminal status. The worker runs in the background.
  */
 router.post('/generate', async (req: AuthRequest, res: Response) => {
   const userId = req.user!.uid;
@@ -103,18 +133,17 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
   const storyId = uuid();
   try {
     const storyRef = db.collection('stories').doc(storyId);
-    console.log(`${storyTag(storyId)} Starting story generation for user ${userId}`);
+    console.log(`${storyTag(storyId)} POST /generate accepted for user ${userId}`);
 
     // Compute favoriteAnimal from specialFriend fields or use legacy value
     const favoriteAnimal = input.specialFriendName
       ? `${input.specialFriendDescription} named ${input.specialFriendName}`
       : input.favoriteAnimal || '';
 
-    // FC-017 Phase 2: write the initial doc with status='queued' + all inputs,
-    // then delegate to runStoryWorker which handles the lock claim, the
-    // generation pipeline with per-phase Firestore writes, and the terminal
-    // status update. Same synchronous contract as before — Phase 3 will make
-    // this 202-ACK + background.
+    // FC-017 Phase 3: write the initial doc with status='queued' + all inputs,
+    // then fire the worker in the background. Respond 202 with just the
+    // storyId so mobile can subscribe to the Firestore doc immediately. The
+    // worker handles claim, pipeline, persistence, and terminal status.
     await storyRef.set({
       userId,
       status: 'queued',
@@ -133,49 +162,19 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       createdAt: FieldValue.serverTimestamp(),
     });
 
-    const { story, illustrations, elapsedMs } = await runStoryWorker(storyId);
-
-    // Return complete story
-    res.json({
-      id: storyId,
-      title: story.title,
-      childName: input.childName,
-      childGender: input.childGender || null,
-      favoriteAnimal,
-      specialFriendName: input.specialFriendName || null,
-      specialFriendDescription: input.specialFriendDescription || null,
-      setting: input.setting,
-      moral: input.moral,
-      authorStyle: input.authorStyle || null,
-      writingStyle: input.writingStyle || null,
-      artStyle,
-      pageCount: story.pages.length,
-      characterReferenceUrls: illustrations.characterReferenceUrls,
-      titlePage: story.titlePage || null,
-      titlePageImageUrl: illustrations.titlePageImageUrl || null,
-      pages: story.pages.map((page, index) => ({
-        pageNumber: page.pageNumber,
-        text: page.text,
-        imageUrl: illustrations.pageUrls[index],
-        soundEffects: page.soundEffects ?? null,
-        emphasizedWords: page.emphasizedWords ?? null,
-      })),
-      generationTimeMs: elapsedMs,
-    });
+    fireWorkerInBackground(storyId);
+    res.status(202).json({ storyId, status: 'queued' });
   } catch (error) {
-    // FC-025 H-6: pre-claim errors (storyRef.set transient failure,
-    // claimLock LockHeldError before worker's try emits) are invisible
-    // to FC-016/FC-017 telemetry without this. Generic in-worker errors
-    // are already emitted by worker.ts; only emit here for known pre-
-    // claim failure shapes to avoid double-counting.
-    if (error instanceof LockHeldError) {
-      emitStageEvent({ storyId, stage: 'total', latencyMs: 0, outcome: 'failure', detail: { errorType: 'LockHeldError' } });
-    } else if (error instanceof StoryNotResumableError) {
-      emitStageEvent({ storyId, stage: 'total', latencyMs: 0, outcome: 'failure', detail: { errorType: 'StoryNotResumableError', reason: error.reason } });
-    }
-    console.error(`${storyTag(storyId)} Story generation failed:`, error);
+    // Only pre-worker errors land here (the initial storyRef.set failed).
+    // The worker is fire-and-forget; its own failures are written to the
+    // Firestore doc as status='failed' and observed by mobile via snapshot.
+    console.error(`${storyTag(storyId)} Initial doc write failed:`, error);
+    emitStageEvent({
+      storyId, stage: 'total', latencyMs: 0, outcome: 'failure',
+      detail: { errorType: 'PreWorkerError', message: error instanceof Error ? error.message : String(error) },
+    });
     res.status(500).json({
-      error: 'Story generation failed',
+      error: 'Failed to start generation',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }
@@ -184,12 +183,14 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
 /**
  * POST /api/stories/:id/resume
  *
- * FC-017 Phase 2: re-fire the worker against an existing story doc whose
- * prior run died mid-flight or was marked failed. Auth + ownership are
- * enforced via the existing middleware + a userId check. Lock contention
- * (LockHeldError) → 409. Terminal-state issues (StoryNotResumableError) → 410.
- * Resumes use whatever artifacts the prior run persisted to Firestore and
- * skip them — only missing artifacts get regenerated. See docs/plans/fc-017.md.
+ * FC-017 Phase 2 + Phase 3: re-fire the worker against an existing story doc
+ * whose prior run died mid-flight or was marked failed. Returns 202 with
+ * `{ storyId, status: 'queued' }` immediately; mobile subscribes to the
+ * Firestore doc for terminal status (`complete` after the resume finishes,
+ * `failed` if the resume also fails). Lock contention is no longer a
+ * synchronous 409 — the worker's transactional claim rejects the call inside
+ * the background, and the mobile snapshot subscription sees no progress
+ * advance (or a new failureReason). Auth + ownership ARE still synchronous.
  */
 router.post('/:id/resume', async (req: AuthRequest, res: Response) => {
   const id = req.params.id as string;
@@ -206,57 +207,20 @@ router.post('/:id/resume', async (req: AuthRequest, res: Response) => {
       res.status(403).json({ error: 'Access denied' });
       return;
     }
+    if (data.status === 'complete') {
+      res.status(410).json({ error: 'Story already complete' });
+      return;
+    }
 
-    console.log(`${storyTag(id)} Resume requested by user ${userId} (current status: ${data.status})`);
-    const { story, illustrations, elapsedMs } = await runStoryWorker(id);
-
-    res.json({
-      id,
-      title: story.title,
-      childName: data.childName,
-      childGender: data.childGender ?? null,
-      favoriteAnimal: data.favoriteAnimal,
-      specialFriendName: data.specialFriendName ?? null,
-      specialFriendDescription: data.specialFriendDescription ?? null,
-      setting: data.setting,
-      moral: data.moral,
-      authorStyle: data.authorStyle ?? null,
-      writingStyle: data.writingStyle ?? null,
-      artStyle: data.artStyle,
-      pageCount: story.pages.length,
-      characterReferenceUrls: illustrations.characterReferenceUrls,
-      titlePage: story.titlePage || null,
-      titlePageImageUrl: illustrations.titlePageImageUrl || null,
-      pages: story.pages.map((page, index) => ({
-        pageNumber: page.pageNumber,
-        text: page.text,
-        imageUrl: illustrations.pageUrls[index],
-        soundEffects: page.soundEffects ?? null,
-        emphasizedWords: page.emphasizedWords ?? null,
-      })),
-      generationTimeMs: elapsedMs,
-      resumed: true,
-    });
+    console.log(`${storyTag(id)} POST /:id/resume accepted by user ${userId} (current status: ${data.status})`);
+    fireWorkerInBackground(id);
+    res.status(202).json({ storyId: id, status: 'queued' });
   } catch (error) {
-    // FC-025 H-6: claimLock throws LockHeldError / StoryNotResumableError
-    // BEFORE the worker's try block can emit a `total` stage_event. Without
-    // the emit here, these failure classes are invisible to FC-016/FC-017
-    // telemetry — the failure-rate metric the FC was supposed to measure
-    // goes biased low. Generic errors from inside the worker's try are
-    // already emitted by the worker, so we only emit here for pre-claim.
-    if (error instanceof LockHeldError) {
-      emitStageEvent({ storyId: id, stage: 'total', latencyMs: 0, outcome: 'failure', detail: { errorType: 'LockHeldError' } });
-      console.warn(`${storyTag(id)} Resume conflict: ${error.message}`);
-      res.status(409).json({ error: 'Story is already being generated', message: error.message });
-      return;
-    }
-    if (error instanceof StoryNotResumableError) {
-      emitStageEvent({ storyId: id, stage: 'total', latencyMs: 0, outcome: 'failure', detail: { errorType: 'StoryNotResumableError', reason: error.reason } });
-      console.warn(`${storyTag(id)} Resume rejected: ${error.message}`);
-      res.status(410).json({ error: 'Story cannot be resumed', message: error.message });
-      return;
-    }
-    console.error(`${storyTag(id)} Resume failed:`, error);
+    console.error(`${storyTag(id)} Resume pre-worker failure:`, error);
+    emitStageEvent({
+      storyId: id, stage: 'total', latencyMs: 0, outcome: 'failure',
+      detail: { errorType: 'PreWorkerError', message: error instanceof Error ? error.message : String(error) },
+    });
     res.status(500).json({
       error: 'Resume failed',
       message: error instanceof Error ? error.message : 'Unknown error',
@@ -266,7 +230,12 @@ router.post('/:id/resume', async (req: AuthRequest, res: Response) => {
 
 /**
  * GET /api/stories
- * List all stories for the authenticated user
+ *
+ * FC-017 Phase 4: returns ALL story statuses for the authenticated user
+ * (was filtered to `status === 'complete'`). The mobile library now needs
+ * to render `queued` / `generating` / `failed` rows with their own
+ * affordances (progress chip on generating; Resume button on failed).
+ * Returned via the same H-2 allowlist so worker internals don't leak.
  */
 router.get('/', async (req: AuthRequest, res: Response) => {
   const userId = req.user!.uid;
@@ -275,13 +244,12 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     const snapshot = await db
       .collection('stories')
       .where('userId', '==', userId)
-      .where('status', '==', 'complete')
       .orderBy('createdAt', 'desc')
       .get();
 
     const stories = snapshot.docs.map((doc) => ({
       id: doc.id,
-      ...doc.data(),
+      ...pickClientFields(doc.data()),
       createdAt: doc.data().createdAt?.toDate?.()?.toISOString() || null,
     }));
 

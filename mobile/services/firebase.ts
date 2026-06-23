@@ -7,6 +7,10 @@ import {
   onAuthStateChanged,
   User,
 } from 'firebase/auth';
+// FC-017 Phase 3+4: Firestore client for onSnapshot subscriptions to
+// in-flight story docs. Backend writes to the `stories` collection; mobile
+// reads via Firestore Security Rules (gated to doc owner).
+import { getFirestore } from 'firebase/firestore';
 
 const PLACEHOLDER_PATTERN = /^(your-|XXXX|0000)/;
 
@@ -59,6 +63,10 @@ const firebaseConfig = {
 // Initialize Firebase (only once)
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 export const auth = getAuth(app);
+// FC-017 Phase 3+4: shared Firestore client used by services/stories.ts
+// for onSnapshot subscriptions. Reads gated by Firestore Security Rules
+// (only the doc's userId can read).
+export const db = getFirestore(app);
 
 /**
  * Register a new user with email and password
