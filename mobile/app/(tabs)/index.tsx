@@ -32,9 +32,27 @@ export default function LibraryScreen() {
   const { gutter, insets, gridColumns } = useResponsive();
   const { columns, cellWidth, gap } = gridColumns();
 
+  // FC-031 Change 1 — library live-update via refetchInterval. The
+  // FC-017 plan promised the user "feel free to come back later — we'll
+  // have it ready in your library." Before this, useQuery with no
+  // refetchInterval + no Firestore subscription + no window-focus signal
+  // on React Native left the library showing the same stale
+  // 'generating' status forever. Now: while ANY row is non-terminal
+  // (queued | generating), poll every 15s (matching the worker
+  // heartbeat cadence). All-terminal → polling stops. Cost: ~4
+  // list-fetches/min while the user is on this screen with anything
+  // in-flight. Cheaper than a per-doc Firestore subscription for the
+  // current load profile; revisit when scale demands it.
   const { data: stories = [], isLoading, refetch, isRefetching } = useQuery({
     queryKey: ['stories'],
     queryFn: getStories,
+    refetchInterval: (query) => {
+      const rows = (query.state.data ?? []) as Story[];
+      const anyInFlight = rows.some(
+        (s) => s.status === 'queued' || s.status === 'generating'
+      );
+      return anyInFlight ? 15_000 : false;
+    },
   });
 
   const deleteMutation = useMutation({

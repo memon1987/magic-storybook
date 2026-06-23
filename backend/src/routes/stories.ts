@@ -27,6 +27,14 @@ export const CLIENT_VISIBLE_DOC_FIELDS = [
   'authorStyle', 'writingStyle', 'length', 'artStyle', 'status', 'pageCount',
   'characterReferenceUrls', 'characterSheets', 'settingIdentity', 'titlePage',
   'titlePageImageUrl', 'castReferenceUrl', 'progress', 'failureReason',
+  // FC-031 Change 6(a) — mobile reads `attempt` to enforce the retry
+  // budget: after 3 attempts on a failed story, Resume is replaced with
+  // "Tried a few times — try different inputs" + "Create new story"
+  // CTA. Without this in the allowlist, mobile can't tell how many
+  // times the user has already tried, and a determined user can burn
+  // ~$0.50-$1.10/Resume in a tight cost loop. `attempt` is a simple
+  // counter; not a privacy concern.
+  'attempt',
 ] as const;
 
 // PR-29 MEDIUM-6: explicit allowlist filter. Tested in
@@ -214,10 +222,31 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       ? `${input.specialFriendDescription} named ${input.specialFriendName}`
       : input.favoriteAnimal || '';
 
-    // FC-017 Phase 3: write the initial doc with status='queued' + all inputs,
-    // then fire the worker in the background. Respond 202 with just the
-    // storyId so mobile can subscribe to the Firestore doc immediately. The
-    // worker handles claim, pipeline, persistence, and terminal status.
+    // FC-017 Phase 3 + FC-031 Change 3: write the initial doc with
+    // status='queued', all inputs, AND a populated `progress` field, then
+    // fire the worker in the background. Respond 202 with just the
+    // storyId so mobile can subscribe to the Firestore doc immediately.
+    // The worker handles claim, pipeline, persistence, and terminal status.
+    //
+    // FC-031 Change 3 — `progress` is populated synchronously at initial
+    // doc-write time. Without this, the very first snapshot mobile sees
+    // has `progress=undefined`, so the /generating screen shows the
+    // generic "Starting…" with no `updatedAt` until the worker writes
+    // its first per-phase progress (~5-15s later). That's a "silent
+    // queued" window where a hard worker death looks identical to
+    // normal startup for several minutes (until the orphan sweep notices).
+    //
+    // FC-031 confirmation-review HIGH-1 fix: avoid the FC-025 B-4 nested-
+    // serverTimestamp footgun by writing `progress` as a literal in `set()`
+    // WITHOUT the sentinel, then immediately running a dot-notation update
+    // for `progress.updatedAt`. The codebase rule (FC-025 B-4) is that
+    // `FieldValue.serverTimestamp()` only reliably resolves at the top
+    // level or via dot-notation; a nested-map sentinel may silently
+    // serialize as null on some SDK versions / downgrades. Two writes
+    // (set + update) for one doc-create is fine — Firestore batches
+    // them into the same connection; the doc is atomic per-write.
+    // `progress.phase: 'queued'` is the honest pre-claim value (the
+    // worker's first `saveProgress` call will flip it to `'story-text'`).
     await storyRef.set({
       userId,
       status: 'queued',
@@ -234,6 +263,16 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       artStyle,
       attempt: 0,
       createdAt: FieldValue.serverTimestamp(),
+      progress: {
+        phase: 'queued',
+        completedSteps: 0,
+        totalSteps: 1,
+        message: 'Starting…',
+      },
+    });
+    // FC-031 confirmation-review HIGH-1: dot-notation for the sentinel.
+    await storyRef.update({
+      'progress.updatedAt': FieldValue.serverTimestamp(),
     });
 
     fireWorkerInBackground(storyId);

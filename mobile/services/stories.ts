@@ -25,9 +25,13 @@ export interface StorySnapshot {
   title?: string;
   progress?: GenerationProgress;
   failureReason?: FailureCode;
+  // FC-031 Change 6(a): claim counter, used by the /generating screen
+  // to enforce the retry budget (cap auto-Resume at 3 attempts on a
+  // failed story).
+  attempt?: number;
   // Other fields exist on the doc (childName, etc.) but the generating
-  // screen + library only need status/progress/failureReason/title. If
-  // additional rendering needs arise, extend this shape — don't spread
+  // screen + library only need status/progress/failureReason/title/attempt.
+  // If additional rendering needs arise, extend this shape — don't spread
   // the raw doc to avoid renderers reaching for internal fields like
   // workerId or storyText.
 }
@@ -67,6 +71,7 @@ export function subscribeToStory(
         title: data.title,
         progress: data.progress as GenerationProgress | undefined,
         failureReason: data.failureReason as FailureCode | undefined,
+        attempt: data.attempt as number | undefined,
       });
     },
     (err) => {
