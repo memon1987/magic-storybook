@@ -170,43 +170,6 @@ OCR detect-and-regenerate; reject Pro (char drift); exclude Recraft.** Productio
 
 ---
 
-### FC-017: Story generation reliability — request resumes / async job model
-
-**Status:** Executing — Phase 1 + Phase 2 **shipped** (PR #26 squash-merged as `ece2458` on 2026-06-22, with FC-025 remediation + CONFIRMED-CLEAN confirmation review). Phase 3 (async job model) + Phase 4 (mobile snapshot + orphan sweep) still pending.
-**Size estimate:** L (likely architecture refactor)
-**Owner:** unassigned
-**Plan file:** [docs/plans/fc-017.md](plans/fc-017.md)
-
-**FC-020 evidence (2026-05-24):** an 8-page production story took **440s** wall-clock, of which the **character-reference stage alone was ~332s** — one ref hit a 503 and took ~331s (Gemini image latency is non-deterministic, 5-15× over spec per [session 2026-04-28]). The page stage (baked text + OCR) was only ~62s. Two takeaways for this FC: (1) the sync model's real failure mode is a slow/again-retried char ref pushing total past the mobile 600s client timeout — when that fires the **backend keeps running to 3600s, finishes, and saves the story**, so the user sees an error but the story silently appears later (a resume/notify model fixes exactly this); (2) char refs are the stage most worth making resumable/cached. The 600s ceiling is the **client axios timeout** (`mobile/services/api.ts`), NOT Cloud Run (3600s, pinned in `cloudbuild.yaml`).
-
-**Problem / opportunity:** Today story generation is a single synchronous HTTP request that runs for 3-5 minutes (FC-013 + FC-012 + FC-015 pipeline). Real failure observed 2026-05-12: ~9.5 min into a request, the Cloud Run instance handling it died (likely cascading from a `TypeError: fetch failed sending request` blip between Cloud Run and Gemini API while generating a character reference). The request was ~80% done — had story text, 1 of 2 char refs, title page; was mid page-1 generation. A new Cloud Run instance booted but did NOT pick up the orphaned request. Mobile client (10 min HTTP timeout) just waited until timeout, then surfaced a generic failure to the user. **80%+ of the work was already paid for and got thrown away.**
-
-This isn't a one-off — any 3-5 min synchronous request is fragile by definition under autoscaling, instance restarts, network blips, or Cloud Run cold-eviction policies.
-
-**Open questions:**
-
-*Architecture:*
-- Should story generation move to an **async job model**? Mobile client POSTs job → gets a job ID immediately → polls a status endpoint (or subscribes to Firestore doc updates, since we already use Firestore). Backend runs the job as a Cloud Run background task or Cloud Tasks-triggered worker, with the job state persisted to Firestore at every step so a crashed instance can resume from the last persisted phase.
-- If async: where does the worker run? Same Cloud Run service with a `?background=true` route? Separate Cloud Run service? Cloud Tasks → Cloud Run? Cloud Functions?
-- For the resume case specifically: persist intermediate artifacts (char ref URLs, title page URL, completed page URLs) to Firestore on each phase boundary. A resumed worker reads what's done and only generates what's missing.
-
-*UX / mobile client:*
-- During the 3-5 min wait, does the user see anything more than a spinner? Even a "Generating page 3 of 6..." progress indicator would massively reduce the abandon rate. Trivial to wire up if we have a status endpoint.
-- On client-side timeout, can we surface a "Resume in background — we'll notify you when done" instead of a hard error?
-
-*Reliability:*
-- Why did the Cloud Run instance die? Investigation needed. Candidates: OOM (multimodal image payloads are 600KB+ each, parallel generation × N pages could spike memory), connection pool exhaustion, Cloud Run's own kill signals during scale-down.
-- Should char-ref retries have circuit-breaker behavior so 3 fails on one ref don't take down the instance with stuck connections?
-- Logging gap: when an instance dies, we lose which request it was handling. Add a final orphan-request sweep that marks pending Firestore docs as failed after N minutes of no progress.
-
-*Cost / footprint:*
-- An async job model adds ~30 sec polling overhead per story. Acceptable trade-off vs the current "all-or-nothing 5-min synchronous request"?
-- Cloud Run min-instances=1 would prevent cold starts but adds ~$15/mo. Worth it once usage justifies?
-
-**Investigation needed before any plan:** root-cause the 2026-05-12 instance death (Cloud Run instance metrics + memory profile during a story generation). Without knowing whether instances die from OOM vs network vs scaledown, we'd be solving the wrong layer.
-
----
-
 ### FC-016: Story generation latency reduction (deep research)
 
 **Status:** Executing — Phase 1 instrumentation merged (PR #23, `f5f9cb5`, 2026-05-27); Phase 1 baseline sweep + investigation note + Phases 2-4 still pending
@@ -328,6 +291,16 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 ---
 
 ## Completed
+
+### FC-017: Story generation reliability — request resumes / async job model — Done 2026-06-23
+
+The full four-phase rollout shipped over PR #23 (Phase 1 instrumentation), PR #26 + FC-025 (Phase 2 resumability), and PR #29 (Phase 3 async 202-ACK + Phase 4 mobile snapshot UI + orphan sweep). What was a 3-5 min synchronous HTTP request that lost ~80% of the work on instance death is now a 202-ACK + Firestore-driven worker: mobile gets `{ storyId }` in ~100-500ms, navigates to `/story/[id]/generating` which subscribes to the Firestore doc, and watches `progress.message` + the determinate bar update through char-ref → title → pages → save. The worker writes per-phase checkpoints (`completedPageUrls`, `castAttempted`, `titleAttempted`) so a resumed run only re-does what's missing. `LockHeldError` + transactional `claimLock` + heartbeat-based stale-lock take-over (90s) prevent double-runs across Cloud Run instances. `--no-cpu-throttling` (pinned in `cloudbuild.yaml`) keeps the worker running after the 202 ships. A Cloud Scheduler job hits `POST /api/admin/sweep-orphans` every 10 min (bearer-token + `crypto.timingSafeEqual`, 5-min orphan threshold) and marks stale generating/queued stories `failed:'orphaned'` so the UI can surface a Resume button instead of stuck-spinning forever. **Two-round adversarial review** per CLAUDE.md stakes-calibration on each phase — Round 2 of Phase 2 caught a 7th BLOCKER (`FieldValue.serverTimestamp()` nested-map footgun) Round 1 missed; FC-025 was opened as a sub-FC to track the consolidated remediation. PR #29 review found 4 BLOCKERs (cloudbuild CPU throttling, generic-error stuck-queued, missing composite indexes, missing Firestore rules) + a `pickClientFields` schema-leak HIGH; all fixed pre-merge. **Closes:** the 2026-05-12 "instance died at 80%" failure mode; the silent-success bug (backend kept running to 3600s past the 600s axios timeout); the lack of per-page progress visibility. **Out of scope:** push notifications when a story finishes (defer); per-story Cloud Tasks/separate worker service (the in-process Cloud Run worker with `--no-cpu-throttling` is sufficient for the current load profile).
+
+- **Plan:** [docs/plans/fc-017.md](plans/fc-017.md)
+- **Sub-FC:** [FC-025](plans/fc-025.md) — Phase 2 adversarial-review remediation (a process artifact, not a separate feature)
+- **PRs:** [#23](https://github.com/memon1987/ai-storybook-app/pull/23) (Phase 1 — instrumentation, `f5f9cb5`), [#26](https://github.com/memon1987/ai-storybook-app/pull/26) (Phase 2 + FC-025, `ece2458`), [#29](https://github.com/memon1987/ai-storybook-app/pull/29) (Phase 3 + 4, `fc8944a`)
+- **Out-of-band deploys (2026-06-23):** `firebase deploy --only firestore` (rules + indexes), `gcloud secrets create sweep-auth-token` → Cloud Run revision `00123-h75`, `gcloud scheduler jobs create http sweep-orphans --schedule="*/10 * * * *"`.
+- **Process lesson:** the FC-025 sub-FC pattern (open a tracking FC when an adversarial review on a closed PR generates a multi-stage remediation) worked — it kept the parent FC plan readable while still recording the remediation in the FC index. Use again for similar future cases.
 
 ### FC-025: FC-017 Phase 2 (PR #26) adversarial-review remediation — Done 2026-06-22
 
