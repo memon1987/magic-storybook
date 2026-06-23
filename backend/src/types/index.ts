@@ -85,7 +85,15 @@ export interface StoryPageWithImage extends StoryPage {
 // scoped to the current phase (e.g. 3 of 6 char-refs done within 'char-refs').
 // `message` is backend-rendered user-facing copy so the mobile reader is a
 // dumb subscriber.
+// FC-031 confirmation-review MEDIUM-3: 'queued' is the honest pre-claim
+// value written by `POST /api/stories/generate`'s initial set(). Before,
+// the route lied and wrote 'story-text' before the worker had even
+// started — misleading for any downstream consumer (analytics, debug
+// dashboard) that reads `progress.phase` directly. The worker's first
+// `saveProgress` call flips it to 'story-text' once it's actually
+// generating.
 export type GenerationPhase =
+  | 'queued'
   | 'story-text'
   | 'char-refs'
   | 'cast'

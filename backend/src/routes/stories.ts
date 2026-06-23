@@ -235,9 +235,18 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
     // its first per-phase progress (~5-15s later). That's a "silent
     // queued" window where a hard worker death looks identical to
     // normal startup for several minutes (until the orphan sweep notices).
-    // Populating progress synchronously eliminates the silent window
-    // and gives mobile a populated `progress.updatedAt` that the
-    // watchdog can advance-check.
+    //
+    // FC-031 confirmation-review HIGH-1 fix: avoid the FC-025 B-4 nested-
+    // serverTimestamp footgun by writing `progress` as a literal in `set()`
+    // WITHOUT the sentinel, then immediately running a dot-notation update
+    // for `progress.updatedAt`. The codebase rule (FC-025 B-4) is that
+    // `FieldValue.serverTimestamp()` only reliably resolves at the top
+    // level or via dot-notation; a nested-map sentinel may silently
+    // serialize as null on some SDK versions / downgrades. Two writes
+    // (set + update) for one doc-create is fine — Firestore batches
+    // them into the same connection; the doc is atomic per-write.
+    // `progress.phase: 'queued'` is the honest pre-claim value (the
+    // worker's first `saveProgress` call will flip it to `'story-text'`).
     await storyRef.set({
       userId,
       status: 'queued',
@@ -255,12 +264,15 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       attempt: 0,
       createdAt: FieldValue.serverTimestamp(),
       progress: {
-        phase: 'story-text',
+        phase: 'queued',
         completedSteps: 0,
         totalSteps: 1,
         message: 'Starting…',
-        updatedAt: FieldValue.serverTimestamp(),
       },
+    });
+    // FC-031 confirmation-review HIGH-1: dot-notation for the sentinel.
+    await storyRef.update({
+      'progress.updatedAt': FieldValue.serverTimestamp(),
     });
 
     fireWorkerInBackground(storyId);

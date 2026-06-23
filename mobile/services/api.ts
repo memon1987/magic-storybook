@@ -109,8 +109,13 @@ export type FailureCode =
 // `message` string; mobile is a dumb subscriber. `updatedAt` comes from
 // Firestore as a Timestamp or from HTTP-JSON as an ISO string; we don't
 // render it.
+// FC-031: 'queued' is the honest pre-claim value the backend writes on
+// initial doc-create (before the worker has actually started). Mobile
+// ignores `phase` for rendering today (only uses `message`); the type
+// kept in sync with the backend enum so analytics/debug consumers don't
+// drift.
 export interface GenerationProgress {
-  phase: 'story-text' | 'char-refs' | 'cast' | 'title' | 'anchor-pages' | 'parallel-pages' | 'finalizing';
+  phase: 'queued' | 'story-text' | 'char-refs' | 'cast' | 'title' | 'anchor-pages' | 'parallel-pages' | 'finalizing';
   completedSteps: number;
   totalSteps: number;
   message: string;

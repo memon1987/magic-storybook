@@ -145,10 +145,19 @@ export default function GeneratingScreen() {
     //       ~$1.50-$3.30 in Gemini calls. Stop the cost loop.
     const budgetExhausted = attempt >= MAX_RESUME_ATTEMPTS;
     const suppressResume = code === 'safety_blocked' || budgetExhausted;
+    // FC-031 confirmation-review MEDIUM-2: budget-exhausted copy should
+    // match the failure class. For input-related failures (safety_blocked),
+    // "try different inputs" reads honestly. For transient failures
+    // (network_error / sigterm / orphaned), it incorrectly implies the
+    // user's input was wrong. Branch on the failure category.
+    const INPUT_RELATED: FailureCode[] = ['safety_blocked'];
+    const isInputRelated = INPUT_RELATED.includes(code);
     const headline = code === 'safety_blocked'
       ? FAILURE_COPY[code]
       : budgetExhausted
-        ? `${FAILURE_COPY[code]} We’ve tried ${attempt} times — try different inputs.`
+        ? isInputRelated
+          ? `${FAILURE_COPY[code]} We’ve tried ${attempt} times — try different inputs.`
+          : `${FAILURE_COPY[code]} We’ve tried ${attempt} times — please try again later.`
         : FAILURE_COPY[code];
     const onCreateNew = () => router.replace('/(tabs)/create');
     return (

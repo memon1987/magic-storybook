@@ -107,6 +107,13 @@ export function progressMessage(
   detail?: { charName?: string; pageNumber?: number },
 ): string {
   switch (phase) {
+    case 'queued':
+      // FC-031: pre-claim phase. The route writes this on initial set();
+      // the worker overwrites it with 'story-text' as soon as claimLock
+      // succeeds. progressMessage is currently only called by the worker
+      // AFTER claim, so this branch is defensive — but the switch must
+      // be exhaustive for type-safety.
+      return 'Starting…';
     case 'story-text':
       return 'Writing your story...';
     case 'char-refs':
