@@ -5,10 +5,12 @@ import {
   Image as SkiaImage,
   Group,
   Paint,
+  Blur,
   RuntimeShader,
   Skia,
   Rect,
   type SkImage,
+  type SkRect,
 } from '@shopify/react-native-skia';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import {
@@ -37,6 +39,35 @@ interface CurlProps {
 const CORNER_RADIUS = 0;
 const COMMIT_THRESHOLD_RATIO = 0.25;
 const CURL_ANIMATION_MS = 300;
+
+// FC-026: every page is drawn fit="contain" so no baked-in narration text is
+// ever cropped on any device/orientation. The resulting letterbox margins are
+// filled by a single blurred, darkened ambient backdrop (a cover-fit copy of
+// the current page) so the reader looks full-bleed instead of black-barred.
+const BACKDROP_BLUR = 22;
+const BACKDROP_DARKEN = 'rgba(0,0,0,0.35)';
+
+interface AmbientBackdropProps {
+  image: SkImage;
+  rect: SkRect;
+  width: number;
+  height: number;
+}
+
+// Blurred, darkened cover-fit bed that fills the contain letterbox margins.
+// Drawn ONCE behind the curl — deliberately kept OUT of the pd-scaled shader
+// layer so (a) the blur radius isn't distorted by the scale transform and
+// (b) the expensive blur isn't recomputed inside the per-pixel curl pass.
+function AmbientBackdrop({ image, rect, width, height }: AmbientBackdropProps) {
+  return (
+    <Group>
+      <Group layer={<Paint><Blur blur={BACKDROP_BLUR} /></Paint>}>
+        <SkiaImage image={image} rect={rect} fit="cover" />
+      </Group>
+      <Rect x={0} y={0} width={width} height={height} color={BACKDROP_DARKEN} />
+    </Group>
+  );
+}
 
 // FC-020: pure page-curl of the illustrations. Narration text is baked into the
 // images themselves, so there is no text overlay to render here anymore.
@@ -119,21 +150,37 @@ export function Curl({
 
   const imageRect = useMemo(() => Skia.XYWHRect(0, 0, width, height), [width, height]);
 
+  // Only reveal the next page while a curl is actually in progress (pointer has
+  // left origin). At rest the current page is drawn fit="contain" with
+  // transparent margins; without this gate the next page would bleed through
+  // those margins whenever adjacent pages differ in aspect ratio.
+  const nextOpacity = useDerivedValue(() =>
+    pointer.value < origin.value ? 1 : 0
+  );
+
   return (
     <GestureDetector gesture={composed}>
       <View style={[styles.container, { width, height }]}>
         <Canvas style={{ width, height }}>
           <Rect x={0} y={0} width={width} height={height} color="black" />
 
-          {/*
-            fit="cover" fills the canvas with no letterbox bands. The story
-            prompt asks for landscape with central focal subjects, so
-            cover-cropping the edges is acceptable.
-          */}
-          {nextImage && (
-            <SkiaImage image={nextImage} rect={imageRect} fit="cover" />
+          {/* Ambient backdrop fills the contain letterbox margins for the whole
+              reader. Based on the current page; updates on commit. */}
+          {currentImage && (
+            <AmbientBackdrop image={currentImage} rect={imageRect} width={width} height={height} />
           )}
 
+          {/* Next page, revealed under the curl. Sharp + contain (never crops
+              baked text). Hidden at rest (opacity 0) so it can't bleed through
+              the current page's transparent contain margins. */}
+          {nextImage && (
+            <Group opacity={nextOpacity}>
+              <SkiaImage image={nextImage} rect={imageRect} fit="contain" />
+            </Group>
+          )}
+
+          {/* Current page curls away. Only the sharp contained image lives in
+              the shader layer — the backdrop stays behind it (see above). */}
           {currentImage && (
             <Group transform={[{ scale: 1 / pd }]}>
               <Group
@@ -144,7 +191,7 @@ export function Curl({
                 }
                 transform={[{ scale: pd }]}
               >
-                <SkiaImage image={currentImage} rect={imageRect} fit="cover" />
+                <SkiaImage image={currentImage} rect={imageRect} fit="contain" />
               </Group>
             </Group>
           )}

@@ -290,6 +290,41 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
+### FC-026: Responsive layout Phase 1 — critical device-layout bugs
+
+**Status:** Executing
+**Size estimate:** M
+**Owner:** Zeshan
+**Plan file:** [docs/plans/fc-026.md](plans/fc-026.md)
+
+**Problem / opportunity:** On iPhone 17 Pro Max two screens render wrong because layout is hardcoded to one form factor. (1) The Library "zooms into" just the first two stories in landscape — `mobile/app/(tabs)/index.tsx` hardcodes `numColumns={2}` with `flex:1` cells whose cover is `aspectRatio:3/4`, so doubling the row width doubles card size and only the first row fits. (2) The reader clips baked-in narration text — `components/PageCurl/Curl.tsx` draws every image `fit="cover"`, cropping edges, and landscape device ratios span ~1.33:1 (iPad) to ~2.16:1 (Pro Max) with no pinned backend aspect ratio. Broader goal: render well across the full Apple device matrix, both orientations.
+
+**Scope (Phase 1):** add root `SafeAreaProvider`; new minimal `useResponsive()` hook (+ pure `computeGrid`); reactive library grid; reader → `fit="contain"` with a blurred ambient backdrop (guarantees no clipped text on every device *and* every existing baked image). iPad/all-screen polish deferred to **FC-027**; optional backend aspect-ratio pin to **FC-028**.
+
+---
+
+### FC-027: Responsive layout Phase 2 — iPad / landscape polish
+
+**Status:** Consideration
+**Size estimate:** M
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** After FC-026 fixes the two critical bugs, the rest of the app still assumes a phone form factor on iPad. Finish `useResponsive` (`scale`, `contentMaxWidth`, `deviceClass`); add a `ResponsiveContainer` (center + max-width) for login/register/settings so cards/rows don't stretch edge-to-edge; fix `create.tsx` art-style grid `width:'31%'` (3-up phone → 4-up tablet) and cap the `'70%'` generating overlay; optional notch gutters on reader top/bottom bars.
+
+---
+
+### FC-028: Pin backend image aspect ratio (optional)
+
+**Status:** Consideration
+**Size estimate:** S
+**Owner:** unassigned
+**Plan file:** not yet
+
+**Problem / opportunity:** With FC-026's reader `contain`, images letterbox by the gap between the generated ratio and the device ratio. Pinning `config.imageConfig.aspectRatio` (~16:9, verified against the installed `@google/genai` + `gemini-3.1-flash-image-preview` allowed ratios) on all four image calls in `backend/src/services/gemini.ts` would shrink those bands for **new** stories. Does not affect existing stories (baked images frozen) — the mobile `contain` change already covers those, which is why this is optional polish, not a fix.
+
+---
+
 ---
 
 ## Completed
