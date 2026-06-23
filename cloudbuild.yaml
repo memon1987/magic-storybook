@@ -1,4 +1,19 @@
 steps:
+  # FC-032 Change 5 (CI test gate): install + test the backend BEFORE
+  # building the image. A broken test suite no longer deploys to prod.
+  # Cloud Build steps are sequential; a non-zero exit here aborts the
+  # pipeline and the previous Cloud Run revision keeps serving (combined
+  # with FC-032's cloud-build-failure alert, the team learns about the
+  # break within minutes instead of at the next merge).
+  - name: 'node:20'
+    entrypoint: 'npm'
+    args: ['ci']
+    dir: 'backend'
+  - name: 'node:20'
+    entrypoint: 'npm'
+    args: ['test']
+    dir: 'backend'
+
   # Build the Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args:
@@ -52,6 +67,15 @@ steps:
       # --no-cpu-throttling pins CPU always allocated; required for the
       # FC-017 fire-and-forget pattern to work at all.
       - '--no-cpu-throttling'
+      # FC-032 Change 2 (B-2): pin max-instances. Previously this was set
+      # via a manual `gcloud run services update` annotation; the next
+      # deploy that touched scaling silently regressed to default 1000.
+      # At concurrency=4, 1000 instances × 4 = 4000 concurrent stories, an
+      # unbounded Gemini bill under a marketing-burst load. 20 is the
+      # engineered ceiling for current scale; raise deliberately via a
+      # plan-file change.
+      - '--max-instances=20'
+      - '--min-instances=0'
 
 options:
   logging: CLOUD_LOGGING_ONLY
