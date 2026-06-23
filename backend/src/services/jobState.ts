@@ -34,11 +34,16 @@ export interface JobState {
   characterRefBytes: Map<string, { data: string; mimeType: string }>;
 
   // Cast lineup (>1 character only).
+  // FC-025 B-6: `castAttempted=true` with `castReferenceUrl=undefined`
+  // means "we tried in a prior run and it failed" — don't retry. Without
+  // this, null was indistinguishable from "never tried" and retried forever.
   castReferenceUrl?: string;
+  castAttempted?: boolean;
   castRefBytes?: { data: string; mimeType: string };
 
-  // Title page.
+  // Title page. Same attempted-vs-not-tried distinction as cast.
   titlePageImageUrl?: string;
+  titleAttempted?: boolean;
 
   // Per-page state. Keyed by pageNumber-as-string (Firestore map keys must
   // be strings). `bytes` is in-memory only; populated on generation OR
@@ -105,8 +110,11 @@ export function progressMessage(
     case 'story-text':
       return 'Writing your story...';
     case 'char-refs':
+      // FC-025 L-3: both branches use `completedSteps` (already-done count).
+      // Previously the with-charName branch added +1, which read "Drawing
+      // Mira... (2 of 3)" right after Mira finished as #1 — off by one.
       return detail?.charName
-        ? `Drawing ${detail.charName}... (${completedSteps + 1} of ${totalSteps})`
+        ? `Drawing ${detail.charName}... (${completedSteps} of ${totalSteps})`
         : `Drawing characters... (${completedSteps} of ${totalSteps})`;
     case 'cast':
       return 'Drawing the cast lineup...';

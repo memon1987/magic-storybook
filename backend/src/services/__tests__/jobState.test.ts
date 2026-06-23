@@ -33,12 +33,16 @@ describe('progressMessage', () => {
   });
 
   it('includes the character name in char-refs phase when provided', () => {
+    // FC-025 L-3: both branches use the already-done counter; previously
+    // the with-charName branch was off-by-one ("Drawing Mira... (2 of 3)"
+    // after Mira finished as #1).
     expect(progressMessage('char-refs', 1, 3, { charName: 'Mira' })).toContain('Mira');
-    expect(progressMessage('char-refs', 1, 3, { charName: 'Mira' })).toContain('2 of 3');
+    expect(progressMessage('char-refs', 1, 3, { charName: 'Mira' })).toContain('1 of 3');
   });
 
-  it('falls back to a counter when no char name is given', () => {
+  it('counter is consistent across with-name and without-name branches', () => {
     expect(progressMessage('char-refs', 2, 3)).toBe('Drawing characters... (2 of 3)');
+    expect(progressMessage('char-refs', 2, 3, { charName: 'Olu' })).toBe('Drawing Olu... (2 of 3)');
   });
 
   it('includes the page number in page phases when provided', () => {

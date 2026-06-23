@@ -4,13 +4,37 @@ import { v4 as uuid } from 'uuid';
 import { authMiddleware } from '../middleware/auth';
 import { WRITING_STYLE_IDS } from '../prompts/story';
 import { runStoryWorker, LockHeldError, StoryNotResumableError } from '../services/worker';
-import { storyTag } from '../services/instrumentation';
+import { storyTag, emitStageEvent } from '../services/instrumentation';
 import {
   AuthRequest,
   StoryInput,
   ArtStyle,
   StoryDocument,
 } from '../types';
+
+/**
+ * FC-025 H-2: explicit allowlist of fields safe to surface to the client
+ * for a story doc. The Phase 2 schema added several internal fields
+ * (workerId, workerHeartbeatAt, storyText, pageUrls, attempt) that must
+ * NEVER reach the client — they leak Cloud Run revision names, duplicate
+ * payloads, and resume internals. The pre-Phase-2 GET /:id spread the
+ * whole doc; this allowlist replaces that.
+ */
+const CLIENT_VISIBLE_DOC_FIELDS = [
+  'userId', 'title', 'childName', 'childGender', 'favoriteAnimal',
+  'specialFriendName', 'specialFriendDescription', 'setting', 'moral',
+  'authorStyle', 'writingStyle', 'length', 'artStyle', 'status', 'pageCount',
+  'characterReferenceUrls', 'characterSheets', 'settingIdentity', 'titlePage',
+  'titlePageImageUrl', 'castReferenceUrl', 'progress', 'failureReason',
+] as const;
+
+function pickClientFields(data: FirebaseFirestore.DocumentData): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of CLIENT_VISIBLE_DOC_FIELDS) {
+    if (data[k] !== undefined) out[k] = data[k];
+  }
+  return out;
+}
 
 const router = Router();
 const db = new Firestore();
@@ -139,6 +163,16 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
       generationTimeMs: elapsedMs,
     });
   } catch (error) {
+    // FC-025 H-6: pre-claim errors (storyRef.set transient failure,
+    // claimLock LockHeldError before worker's try emits) are invisible
+    // to FC-016/FC-017 telemetry without this. Generic in-worker errors
+    // are already emitted by worker.ts; only emit here for known pre-
+    // claim failure shapes to avoid double-counting.
+    if (error instanceof LockHeldError) {
+      emitStageEvent({ storyId, stage: 'total', latencyMs: 0, outcome: 'failure', detail: { errorType: 'LockHeldError' } });
+    } else if (error instanceof StoryNotResumableError) {
+      emitStageEvent({ storyId, stage: 'total', latencyMs: 0, outcome: 'failure', detail: { errorType: 'StoryNotResumableError', reason: error.reason } });
+    }
     console.error(`${storyTag(storyId)} Story generation failed:`, error);
     res.status(500).json({
       error: 'Story generation failed',
@@ -204,12 +238,20 @@ router.post('/:id/resume', async (req: AuthRequest, res: Response) => {
       resumed: true,
     });
   } catch (error) {
+    // FC-025 H-6: claimLock throws LockHeldError / StoryNotResumableError
+    // BEFORE the worker's try block can emit a `total` stage_event. Without
+    // the emit here, these failure classes are invisible to FC-016/FC-017
+    // telemetry — the failure-rate metric the FC was supposed to measure
+    // goes biased low. Generic errors from inside the worker's try are
+    // already emitted by the worker, so we only emit here for pre-claim.
     if (error instanceof LockHeldError) {
+      emitStageEvent({ storyId: id, stage: 'total', latencyMs: 0, outcome: 'failure', detail: { errorType: 'LockHeldError' } });
       console.warn(`${storyTag(id)} Resume conflict: ${error.message}`);
       res.status(409).json({ error: 'Story is already being generated', message: error.message });
       return;
     }
     if (error instanceof StoryNotResumableError) {
+      emitStageEvent({ storyId: id, stage: 'total', latencyMs: 0, outcome: 'failure', detail: { errorType: 'StoryNotResumableError', reason: error.reason } });
       console.warn(`${storyTag(id)} Resume rejected: ${error.message}`);
       res.status(410).json({ error: 'Story cannot be resumed', message: error.message });
       return;
@@ -285,9 +327,10 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
       ...doc.data(),
     }));
 
+    // FC-025 H-2: explicit allowlist; never spread the raw doc.
     res.json({
       id: storyDoc.id,
-      ...storyData,
+      ...pickClientFields(storyData ?? {}),
       createdAt: storyData?.createdAt?.toDate?.()?.toISOString() || null,
       pages,
     });

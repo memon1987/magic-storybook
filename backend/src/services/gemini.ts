@@ -39,7 +39,6 @@ import {
 import {
   JobState,
   JobStateWriter,
-  emptyJobState,
   progressMessage,
 } from './jobState';
 import { downloadRef } from './gcsDownload';
@@ -761,19 +760,11 @@ export interface AllIllustrationsResult {
   castReferenceUrl: string | null;                // FC-020: cast lineup ref (null when <2 characters or gen failed)
 }
 
-/**
- * FC-017 Phase 2: no-op JobStateWriter for callers that don't want
- * incremental Firestore writes (e.g. tests, the back-compat path).
- * Production calls go through worker.ts with a FirestoreJobStateWriter.
- */
-const noopWriter: JobStateWriter = {
-  async saveStoryText() { /* no-op */ },
-  async saveCharacterReference() { /* no-op */ },
-  async saveCastReference() { /* no-op */ },
-  async saveTitlePage() { /* no-op */ },
-  async savePage() { /* no-op */ },
-  async saveProgress() { /* no-op */ },
-};
+// FC-025 L-5: noopWriter removed. Previously generateAllIllustrations
+// accepted `opts.writer?` and silently fell back to a no-op. A future
+// production caller that forgot to pass a writer would have gotten broken
+// resume capability with zero indication. opts is now REQUIRED — tests
+// construct their own no-op writer inline if needed (see resume.test.ts).
 
 /**
  * Generate all illustrations for a story (FC-020 pipeline; FC-017 Phase 2 resume-aware).
@@ -793,19 +784,20 @@ const noopWriter: JobStateWriter = {
  * artifacts that downstream phases need as multimodal inputs (char-refs, cast,
  * anchor pages), the bytes are re-downloaded from GCS. `opts.writer` receives
  * per-artifact + per-progress updates so a crashed worker can be resumed by
- * a future run reading the persisted state. When opts is omitted (e.g. tests),
- * behavior is identical to the pre-Phase-2 path (no persistence, no skipping).
+ * a future run reading the persisted state.
+ *
+ * FC-025 L-5: opts is REQUIRED. Tests construct their own no-op writer + an
+ * emptyJobState(storyId) if they don't need persistence.
  */
 export async function generateAllIllustrations(
   story: GeneratedStory,
   storyId: string,
   animalType: string,
-  style: ArtStyle = 'watercolor',
-  childName?: string,
-  opts: { state?: JobState; writer?: JobStateWriter } = {},
+  style: ArtStyle,
+  childName: string | undefined,
+  opts: { state: JobState; writer: JobStateWriter },
 ): Promise<AllIllustrationsResult> {
-  const state: JobState = opts.state ?? emptyJobState(storyId);
-  const writer: JobStateWriter = opts.writer ?? noopWriter;
+  const { state, writer } = opts;
   const startTime = Date.now();
   const sortedPages = [...story.pages].sort((a, b) => a.pageNumber - b.pageNumber);
 
@@ -934,8 +926,12 @@ export async function generateAllIllustrations(
   // multimodal ref on every page) get rehydrated from GCS on skip; title bytes
   // are never used downstream (cover-only) so no rehydrate needed.
   const needsCast = orderedSheets.length > 1;
-  const castAlreadyDone = !!state.castReferenceUrl;
-  const titleAlreadyDone = !!state.titlePageImageUrl;
+  // FC-025 B-6: "already done" must include "previously attempted and failed"
+  // (recorded via state.castAttempted / state.titleAttempted). Without this,
+  // a null persisted by a prior failed run looked identical to "not yet
+  // tried" and retried forever, burning Gemini cost per resume.
+  const castAlreadyDone = !!state.castReferenceUrl || state.castAttempted === true;
+  const titleAlreadyDone = !!state.titlePageImageUrl || state.titleAttempted === true;
   const castTodo = needsCast && !castAlreadyDone;
   const titleTodo = !!story.titlePage && !titleAlreadyDone;
 
@@ -963,9 +959,16 @@ export async function generateAllIllustrations(
     console.warn(`${storyTag(storyId)} Cast lineup reference failed to produce image data — pages run without it.`);
     await writer.saveCastReference(null);
   } else if (castAlreadyDone) {
-    const bytes = await downloadRef(state.castReferenceUrl!);
-    if (bytes) baseRefs.push({ type: 'cast', data: bytes.data, mimeType: bytes.mimeType });
-    else console.warn(`${storyTag(storyId)} Cast ref rehydrate from GCS failed on resume — pages run without it.`);
+    // FC-025 B-6: distinguish "had URL → rehydrate" from "attempted-and-failed
+    // → skip rehydrate". Without this distinction the `!` non-null assertion
+    // crashed on castAttempted-but-no-URL state.
+    if (state.castReferenceUrl) {
+      const bytes = await downloadRef(state.castReferenceUrl);
+      if (bytes) baseRefs.push({ type: 'cast', data: bytes.data, mimeType: bytes.mimeType });
+      else console.warn(`${storyTag(storyId)} Cast ref rehydrate from GCS failed on resume — pages run without it.`);
+    } else {
+      console.log(`${storyTag(storyId)} Cast ref attempted in prior run and failed — pages run without it.`);
+    }
   }
 
   // Title: persist if freshly generated. No bytes needed downstream.
@@ -1030,11 +1033,18 @@ export async function generateAllIllustrations(
     if (r.imageBase64 && canonicalAnchors.length < CANONICAL_ANCHOR_PAGES) {
       canonicalAnchors.push({ type: 'prior_page', pageNumber: page.pageNumber, data: r.imageBase64, mimeType: r.mimeType });
     }
-    await writer.savePage(page.pageNumber, {
-      url: r.publicUrl,
-      ocrPassed: r.imageBase64 !== null,
-      attempts: 1,
-    });
+    // FC-025 B-2: only persist to pageUrls when generation produced real
+    // image data. Placeholder fallback (imageBase64 === null) means a
+    // transient or permanent generation failure — DON'T persist it; let
+    // resume retry. Without this guard, the placehold.co URL was recorded
+    // as "done" and locked in permanently across every future resume.
+    if (r.imageBase64 !== null) {
+      await writer.savePage(page.pageNumber, {
+        url: r.publicUrl,
+        ocrPassed: true,
+        attempts: 1,
+      });
+    }
     anchorCompletedCount += 1;
     await writer.saveProgress('anchor-pages', anchorCompletedCount, seqPages.length,
       progressMessage('anchor-pages', anchorCompletedCount, seqPages.length, { pageNumber: page.pageNumber }));
@@ -1057,18 +1067,29 @@ export async function generateAllIllustrations(
         `${storyTag(storyId)} Step 3b: ${todoParPages.length} parallel page(s) ${todoParPages.map((p) => p.pageNumber).join(', ')} (concurrency ${PAGE_GEN_CONCURRENCY}, ${refs.length} ref(s); ${parPages.length - todoParPages.length} already done from prior attempt)`,
       );
       const parPagesStart = Date.now();
+      // FC-025 H-8: in-batch atomic counter so per-page saveProgress can
+      // report real progress. Previously the only saveProgress for this
+      // phase fired ONCE before the batch started, leaving the mobile
+      // progress bar frozen for ~30-60s during the longest phase.
+      let inBatchCompletedCount = parPages.length - todoParPages.length;
       const parResults = await mapWithConcurrency(todoParPages, PAGE_GEN_CONCURRENCY, async (page) => {
         const r = await generateIllustration(
           page.sceneDescription, animalType, storyId, page.pageNumber, page.text, style,
           story.characterSheets, story.settingIdentity, refs, page.soundEffects, page.emphasizedWords,
         );
-        // FC-017 Phase 2: per-page persistence the moment it lands so a crash
-        // mid-batch only loses the not-yet-completed pages, not the whole batch.
-        await writer.savePage(page.pageNumber, {
-          url: r.publicUrl,
-          ocrPassed: r.imageBase64 !== null,
-          attempts: 1,
-        });
+        // FC-017 Phase 2 + FC-025 B-2: per-page persistence the moment it
+        // lands so a crash mid-batch only loses the not-yet-completed pages.
+        // Skip persistence for placeholder fallback so resume can retry.
+        if (r.imageBase64 !== null) {
+          await writer.savePage(page.pageNumber, {
+            url: r.publicUrl,
+            ocrPassed: true,
+            attempts: 1,
+          });
+        }
+        inBatchCompletedCount += 1;
+        await writer.saveProgress('parallel-pages', inBatchCompletedCount, parPages.length,
+          progressMessage('parallel-pages', inBatchCompletedCount, parPages.length, { pageNumber: page.pageNumber }));
         return r;
       });
       todoParPages.forEach((page, i) => results.set(page.pageNumber, parResults[i].publicUrl));

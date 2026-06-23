@@ -11,8 +11,17 @@
 
 import { Storage } from '@google-cloud/storage';
 
+// FC-025 L-1: previously used `process.env.STORAGE_BUCKET!`, which silently
+// resolved to undefined at runtime if the env var was missing — making every
+// resume rehydrate fail and the URL prefix at L#26 become
+// "https://storage.googleapis.com/undefined/" (matches nothing, every download
+// returns null, every resume regenerates from scratch, cost amplification).
+// Throw at module load instead so misconfiguration fails loudly.
+const bucketName = process.env.STORAGE_BUCKET;
+if (!bucketName) {
+  throw new Error('STORAGE_BUCKET env var is required for FC-017 resume rehydrate');
+}
 const storage = new Storage();
-const bucketName = process.env.STORAGE_BUCKET!;
 const bucket = storage.bucket(bucketName);
 
 /**
@@ -41,11 +50,16 @@ export async function downloadRef(publicUrl: string): Promise<DownloadedRef | nu
   const name = gcsObjectName(publicUrl);
   if (!name) return null;
   try {
+    // FC-025 efficiency: previously called getMetadata() AFTER download() —
+    // two round-trips per ref. The bucket only ever stores image/png or
+    // image/jpeg (see uploadGeneratedImage in gemini.ts which always sets
+    // one of those), so extension-based inference is sufficient. Single
+    // round-trip; ~halves rehydrate latency.
     const file = bucket.file(name);
     const [buffer] = await file.download();
-    const [meta] = await file.getMetadata();
-    const mimeType = (typeof meta.contentType === 'string' && meta.contentType)
-      || (name.endsWith('.jpg') || name.endsWith('.jpeg') ? 'image/jpeg' : 'image/png');
+    const mimeType = name.endsWith('.jpg') || name.endsWith('.jpeg')
+      ? 'image/jpeg'
+      : 'image/png';
     return { data: buffer.toString('base64'), mimeType };
   } catch (e) {
     console.warn(`[FC-017 resume] Failed to re-download ref from ${publicUrl}:`, e);

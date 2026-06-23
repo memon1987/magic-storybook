@@ -156,10 +156,29 @@ export interface StoryDocument {
   workerId?: string;
   workerHeartbeatAt?: FirebaseFirestore.Timestamp;
   attempt?: number;                                 // resume counter (1, 2, ...)
-  failureReason?: string;                           // populated on terminal failure
+  failureReason?: FailureCode;                      // FC-025 H-1: bounded enum, not raw error message
+
+  // FC-025 B-6: distinguish "never attempted" from "attempted and failed".
+  // Without these, a prior-run failure persisted as castReferenceUrl=null
+  // looked indistinguishable from "not yet tried" and was retried forever.
+  castAttempted?: boolean;
+  titleAttempted?: boolean;
 
   createdAt: FirebaseFirestore.Timestamp;
 }
+
+/**
+ * FC-025 H-1: bounded set of failure codes that may be surfaced to the
+ * mobile client via the failureReason field. Raw upstream Error.message
+ * strings are logged server-side only, never persisted here.
+ */
+export type FailureCode =
+  | 'generation_error'
+  | 'network_error'
+  | 'quota_exceeded'
+  | 'safety_blocked'
+  | 'sigterm'
+  | 'unknown';
 
 // Page document in Firestore (subcollection)
 export interface PageDocument {
