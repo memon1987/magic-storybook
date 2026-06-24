@@ -36,7 +36,18 @@ gcloud run services update-traffic storybook-api --region=us-central1 \
   --to-revisions=PRIOR=100
 ```
 
-This is INSTANT (no new container start; Cloud Run just shifts the routing). Validate via `gcloud run services describe storybook-api` — the "Traffic" section should show `100%` to PRIOR.
+The routing-table shift is instant. **But** because `cloudbuild.yaml` pins `--min-instances=0` (FC-032), the prior revision has likely been scaled to zero. **Expect a 5-15s cold start on the first request.** Pre-warm before claiming the rollback succeeded:
+
+```bash
+# Fire 2-3 hits in a row — the first one trips the cold start; subsequent
+# requests land on the warm instance.
+for i in 1 2 3; do
+  curl -sS -o /dev/null -w "warm-up $i: %{http_code} in %{time_total}s\n" \
+    https://storybook-api-983903024759.us-central1.run.app/health
+done
+```
+
+Validate via `gcloud run services describe storybook-api` — the "Traffic" section should show `100%` to PRIOR.
 
 ### Step 3 — Smoke test
 

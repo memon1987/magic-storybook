@@ -11,10 +11,20 @@ A customer reports a story has been "Generating…" for >15 min and the Resume b
 1. **Get the storyId** — ask the customer to long-press the row → Share → look at the URL fragment, OR look it up by their `userId` in Firestore Console:
    `https://console.firebase.google.com/project/ai-storybook-app-2025/firestore/data/~2Fstories` → filter by `userId == <uid>` sort by `createdAt` desc.
 
-2. **Inspect the doc:**
+2. **Inspect the doc** (`gcloud firestore` has no `documents read` subcommand; use one of these instead):
+
+   **Option A — Firebase Console (easiest, no setup):**
+   `https://console.firebase.google.com/project/ai-storybook-app-2025/firestore/data/~2Fstories~2FSTORY_ID`
+   (URL-encode `/` as `~2F`).
+
+   **Option B — Node one-liner from a machine with `gcloud auth application-default login`:**
    ```bash
-   gcloud firestore documents read stories/STORY_ID
+   node -e "const{Firestore}=require('@google-cloud/firestore');
+     (async()=>{const d=await new Firestore().doc('stories/STORY_ID').get();
+     console.log(JSON.stringify(d.data(),null,2));})()"
    ```
+   Run from `backend/` so `@google-cloud/firestore` resolves.
+
    Fields to check:
    - `status` — `generating` confirms the symptom; if `failed` or `complete`, the user is on a stale snapshot.
    - `workerId` — should be set; format `<K_REVISION>-<uuid>`.
@@ -41,14 +51,21 @@ If `workerHeartbeatAt` is fresh (<90s) AND `progress.updatedAt` is advancing, th
 `workerHeartbeatAt` is stale, multiple cron ticks have passed, and doc is still `generating`. Run [sweep-job-failing.md](sweep-job-failing.md) end-to-end to fix the sweep. The doc will be picked up on the next successful tick.
 
 ### Cause D — Manual unstick (rare; document why before doing this)
-If the customer is impatient and the sweep is broken (or won't recover within an acceptable time), manually flip the doc to `failed:orphaned`:
+If the customer is impatient and the sweep is broken (or won't recover within an acceptable time), manually flip the doc to `failed:orphaned`. There's no `gcloud firestore documents` subcommand — use the Firebase Console:
+
+1. Open `https://console.firebase.google.com/project/ai-storybook-app-2025/firestore/data/~2Fstories~2FSTORY_ID`.
+2. Edit fields: set `status='failed'`, `failureReason='orphaned'`; delete the `workerId` and `workerHeartbeatAt` fields entirely (the × icon next to each).
+3. Save.
+
+Or via Node (must run from `backend/` with ADC):
 ```bash
-gcloud firestore documents update stories/STORY_ID \
-  --update-mask='status,failureReason,workerId,workerHeartbeatAt' \
-  --field='status=failed,failureReason=orphaned'
-# Note: gcloud syntax for delete fields is fiddly; easier via Firebase Console
-# → edit doc → status='failed', failureReason='orphaned', delete workerId, delete workerHeartbeatAt
+node -e "const{Firestore,FieldValue}=require('@google-cloud/firestore');
+  (async()=>{await new Firestore().doc('stories/STORY_ID').update({
+    status:'failed',failureReason:'orphaned',
+    workerId:FieldValue.delete(),workerHeartbeatAt:FieldValue.delete()});
+  console.log('unstuck');})()"
 ```
+
 Tell the customer to refresh the library; they'll see a Resume button.
 
 ## Validation

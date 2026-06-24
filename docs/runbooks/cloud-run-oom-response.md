@@ -15,12 +15,12 @@ The `storybook-api error rate` Cloud Monitoring alert fires: `severity>=ERROR` l
    ```
    Look for patterns: is it one user / one storyId, or distributed? Is it one specific error class, or varied?
 
-2. **Check for OOM-killed containers:**
+2. **Check for OOM-killed containers** (Cloud Run's OOM-kill message is `Memory limit of XXXMi exceeded with YYYMi used` — filter on the prefix string Cloud Run actually emits, not "out of memory"):
    ```bash
-   gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="storybook-api" AND severity>=ERROR AND textPayload:"out of memory"' \
+   gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="storybook-api" AND textPayload:"Memory limit of"' \
      --limit=20 --format='value(timestamp,textPayload)'
    ```
-   OOM-kill messages from Cloud Run look like `Memory limit of XXXMi exceeded with YYYMi used`. Each one represents a request that was terminated.
+   Each match represents a request that was terminated by the kernel.
 
 3. **Check instance scaling:**
    ```bash

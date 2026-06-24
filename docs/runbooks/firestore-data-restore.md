@@ -75,8 +75,10 @@ gcloud firestore databases restore \
 The restored data lands in a NEW database (`restore-staging`). To make it production:
 
 ```bash
-# 3. Validate the restored database has what you expect (Firebase Console
-#    or gcloud firestore documents list --database=restore-staging stories).
+# 3. Validate the restored database has what you expect (Firebase Console:
+#    https://console.firebase.google.com/project/ai-storybook-app-2025/firestore/databases/restore-staging
+#    There's no `gcloud firestore documents` subcommand; use Console or a
+#    Node script with `new Firestore({databaseId:'restore-staging'}).collection('stories').get()`).
 # 4. THIS IS THE DANGEROUS STEP. You can't atomically swap databases.
 #    Options:
 #    a. App-level: update mobile + backend env to point at restore-staging.

@@ -16,16 +16,19 @@ The resume endpoint requires a Firebase ID token for the doc's owner. You DON'T 
 
 Tell them to open the story from their library and tap "Try again." This is the documented flow.
 
-### Path B — Use an admin token (requires Firebase service account)
+### Path B — Use an admin token (requires Firebase Admin SDK + ADC)
 
-Only do this if Path A isn't available. You'll need a token signed by the Firebase Admin SDK that claims the owner's `uid`:
+Only do this if Path A isn't available. The committed helper `backend/scripts/mint-spike-token.js` reads the story's owner uid from Firestore, mints a Firebase custom token signed by the firebase-adminsdk SA, exchanges it for an ID token via the Identity Toolkit REST API, and prints the ID token to stdout.
 
+**Prerequisites:**
+- Local machine has `gcloud auth application-default login` done as a user with `roles/iam.serviceAccountTokenCreator` on `firebase-adminsdk-fbsvc@ai-storybook-app-2025.iam.gserviceaccount.com`.
+- Knowledge of the Firebase Web API key (env var `EXPO_PUBLIC_FIREBASE_API_KEY` in `mobile/eas.json`; not secret — designed-public Firebase config).
+
+**Run:**
 ```bash
-node backend/scripts/mint-spike-token.js <owner-uid>
-# Outputs a custom token; exchange via:
-# https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=<FIREBASE_WEB_API_KEY>
-# (use the EXPO_PUBLIC_FIREBASE_API_KEY from mobile/eas.json)
-# Capture idToken from the response, then:
+cd backend
+WEB_API_KEY="<from-mobile/eas.json>"
+ID_TOKEN=$(node scripts/mint-spike-token.js STORY_ID "$WEB_API_KEY")
 curl -sS -X POST -H "Authorization: Bearer $ID_TOKEN" \
   https://storybook-api-983903024759.us-central1.run.app/api/stories/STORY_ID/resume
 ```
@@ -47,4 +50,4 @@ After Resume:
 ## Gotchas
 
 - **Resume burns Gemini cost.** Each resume re-runs only the missing phases (Phase 2 checkpoints) but if a `generateStory` retry is needed, that's ~$0.05; full char-ref regen is ~$0.20-$0.50; full page regen is ~$0.50-$1.10.
-- **Resume can't recover a doc whose `userId` is wrong.** The route at `stories.ts:245` rejects mismatched ownership with 403. If the doc's userId is corrupted, you need to fix the doc first.
+- **Resume can't recover a doc whose `userId` is wrong.** The `/api/stories/:id/resume` route rejects mismatched ownership with 403 (search `backend/src/routes/stories.ts` for `Access denied`). If the doc's userId is corrupted, fix the doc first.

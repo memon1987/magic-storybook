@@ -18,11 +18,25 @@ The bearer token lives in **three** places that must update in lockstep:
 
 If you update only some of these or do them out of order, the next sweep tick fails with 401 and stays failing until you complete the sequence.
 
-## Procedure (4 steps)
+## Procedure (4 steps; do steps 1–3 back-to-back without pausing)
 
-### Step 1 — Generate + create new secret version
+### Step 1 — Capture prior version + create new secret version + pause Scheduler
 
+Pre-step (HIGH-2 fix — capture the version we'll disable in Step 4, so we don't have to guess later):
 ```bash
+PRIOR_LATEST=$(gcloud secrets versions list sweep-auth-token \
+  --filter='state=ENABLED' --sort-by=~createTime --limit=1 --format='value(name)')
+echo "Prior latest (we'll disable this in Step 4): $PRIOR_LATEST"
+```
+
+Pause the Scheduler (HIGH-1 fix — prevents 401 alert noise during the Step 2→3 cutover window; resume in Step 4):
+```bash
+gcloud scheduler jobs pause sweep-orphans --location=us-central1
+```
+
+Generate + create the new version. `umask 077` so the temp file isn't world-readable:
+```bash
+umask 077
 openssl rand -base64 48 | tr -d '\n' > /tmp/sweep-new.txt
 gcloud secrets versions add sweep-auth-token --data-file=/tmp/sweep-new.txt
 ```
@@ -38,7 +52,7 @@ gcloud scheduler jobs update http sweep-orphans \
   --update-headers="Authorization=Bearer $NEW,Content-Type=application/json"
 ```
 
-The Scheduler job now sends the NEW token. But Cloud Run is still verifying against the OLD token (env var resolved at the prior container's start). The next tick will 401 until step 3.
+The Scheduler is paused (Step 1), so no immediate effect on production. The next manual or auto tick after we resume in Step 4 will send the new token.
 
 ### Step 3 — Roll Cloud Run to a new revision that re-resolves `latest`
 
@@ -49,8 +63,9 @@ gcloud run services update storybook-api --region=us-central1 \
 
 This creates a new revision whose container start-up resolves `sweep-auth-token:latest` → the new version. After this revision serves 100% of traffic (usually ~2-3 min), Cloud Run verifies against the new token. The Scheduler's new-token requests now succeed.
 
-### Step 4 — Smoke-test, then disable the old version
+### Step 4 — Smoke-test, disable the old version, resume Scheduler
 
+Smoke-test the new token:
 ```bash
 NEW=$(cat /tmp/sweep-new.txt)
 curl -sS -o /dev/null -w "%{http_code}\n" -X POST \
@@ -60,16 +75,17 @@ curl -sS -o /dev/null -w "%{http_code}\n" -X POST \
 # Expected: 200
 ```
 
-If `200`, disable the old version:
-
+If `200`, disable the old version (no guessing — we captured `PRIOR_LATEST` in Step 1):
 ```bash
-# Replace N with the version number that was 'latest' BEFORE step 1.
-gcloud secrets versions list sweep-auth-token --format='value(name,state)'
-gcloud secrets versions disable N --secret=sweep-auth-token
+gcloud secrets versions disable "$PRIOR_LATEST" --secret=sweep-auth-token
+```
+
+Resume the Scheduler:
+```bash
+gcloud scheduler jobs resume sweep-orphans --location=us-central1
 ```
 
 Scrub the local copy:
-
 ```bash
 rm -f /tmp/sweep-new.txt
 ```
@@ -83,8 +99,9 @@ rm -f /tmp/sweep-new.txt
 ## Common mistakes
 
 - **Skipping step 3** → Scheduler's new token is rejected indefinitely. The running Cloud Run revision NEVER re-reads `latest` automatically; you must trigger a re-resolve via a new revision.
-- **Reversing 2 and 3** → Scheduler keeps sending old token, but Cloud Run now expects the new one → 401 starting immediately. Recoverable by completing step 2 quickly.
-- **Forgetting step 4 (disable)** → both tokens remain valid. The leaked token is still hot. Always disable.
+- **Reversing 2 and 3** → Scheduler keeps sending old token, but Cloud Run now expects the new one → 401 starting immediately. The pause-in-Step-1 + resume-in-Step-4 pattern makes this immaterial; if you didn't pause, complete step 2 within ~30s of step 3.
+- **Forgetting step 4 (disable + resume)** → both tokens remain valid (the leaked token is still hot) AND the Scheduler stays paused (no orphan sweeps until you notice). Always finish step 4.
+- **Forgetting to capture `PRIOR_LATEST` in step 1** → at 3am after smoke-test passes, you'd have to look at `gcloud secrets versions list` where TWO versions are ENABLED and guess which is the prior one. Fat-finger risk → disable the wrong (newer) version → next deploy fails.
 
 ## Future hardening
 
