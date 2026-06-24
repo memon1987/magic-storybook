@@ -299,45 +299,6 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
-### FC-030: FC-017 corruption-class hotfix — deterministic page IDs + sweep transactional re-read + SIGTERM-aware finalize + transactional bg-catch
-
-**Status:** Draft
-**Size estimate:** M
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-030.md](plans/fc-030.md)
-**Parent FC:** FC-017 (`docs/plans/fc-017.md`)
-**Investigation:** [docs/investigations/fc-017-retrospective-2026-06-23.md](investigations/fc-017-retrospective-2026-06-23.md)
-
-**Problem / opportunity:** The 2026-06-23 system-level retrospective adversarial review found 3 distributed-systems BLOCKERs in FC-017 Phase 2/3/4 that all per-PR reviews structurally missed. Common failure: duplicate page docs in the `stories/{id}/pages` subcollection under any double-execution path (sweep ↔ takeover race, SIGTERM during success-batch, bg-catch clobbering a healthy worker). Auto-id'd page-doc references at [worker.ts:377](plans/../backend/src/services/worker.ts) make the success-path `batch.commit` non-idempotent. Mobile reader renders every page twice. Single highest-leverage fix: deterministic page IDs (1 LOC). Defense-in-depth: sweep transactional re-read + SIGTERM-aware finalize + transactional bg-catch.
-
----
-
-### FC-031: FC-017 mobile hardening — library live-update + navigatedRef fix + retry budget + permission_denied recovery + watchdog
-
-**Status:** Draft
-**Size estimate:** M
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-031.md](plans/fc-031.md)
-**Parent FC:** FC-017 (`docs/plans/fc-017.md`)
-**Investigation:** [docs/investigations/fc-017-retrospective-2026-06-23.md](investigations/fc-017-retrospective-2026-06-23.md)
-
-**Problem / opportunity:** The 2026-06-23 retrospective's mobile state-machine reviewer found 4 HIGHs in Phase 4 mobile, including one that directly contradicts the FC-017 plan's user promise: the library tab shows stale generating-status forever because it has no Firestore subscription or `refetchInterval`. Also: `navigatedRef` strands the user on `/generating` after a Resume-then-success cycle; no client-side watchdog leaves the user on "Starting…" for up to 15 min before the sweep flips the doc; `permission_denied` is unrecoverable without app-kill; no retry budget so a `safety_blocked` failure burns ~$0.50-$1.10/Resume cycle in a tight loop. Scope: backend touchpoints (initial-progress populate + allowlist `attempt`) + all mobile changes in one PR. Ships to TestFlight via the next EAS build.
-
----
-
-### FC-032: FC-017 ops floor baseline — Firestore PITR + daily backups + pin `--max-instances` + alerting + CI test gate + OIDC sweep auth + runbooks
-
-**Status:** Draft
-**Size estimate:** L
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-032.md](plans/fc-032.md)
-**Parent FC:** FC-017 (`docs/plans/fc-017.md`)
-**Investigation:** [docs/investigations/fc-017-retrospective-2026-06-23.md](investigations/fc-017-retrospective-2026-06-23.md)
-
-**Problem / opportunity:** The 2026-06-23 retrospective's cloud-ops reviewer found that FC-017's data-layer + distributed-systems work is sound, but **the operational posture surrounding it is essentially zero**: no Firestore backups, no PITR; `--max-instances=20` not pinned in `cloudbuild.yaml` (a future deploy silently regresses to default 1000); zero alerting / monitoring; Cloud Scheduler doesn't actually retry on failure; secret rotation broken-by-default; static bearer token readable to any Project Viewer; CI runs no tests before deploy; zero runbooks. Ships in 3 PRs to stay rollback-friendly: static config + runbooks first; OIDC backend (additive); OIDC cutover + static-bearer removal.
-
----
-
 ### FC-033: Firestore emulator + integration tests for FC-017 concurrency-critical paths
 
 **Status:** Consideration
@@ -378,6 +339,33 @@ _(Implemented/reviewed under the label "FC-029"; renumbered to FC-035 after a co
 ---
 
 ## Completed
+
+### FC-032: FC-017 ops floor baseline — Done 2026-06-24
+
+Sub-FC of FC-017. Closes R3 from the 2026-06-23 system-level retrospective ("operational posture surrounding FC-017 is essentially zero"). Two repo-side changes: `cloudbuild.yaml` gains a `npm ci`+`npm test` CI test gate (broken tests no longer deploy) and a pinned `--max-instances=20`/`--min-instances=0` (was a manual annotation that next deploy would have silently regressed to default 1000). Nine runbooks under `docs/runbooks/` cover the most-likely operational scenarios (sweep failure, secret rotation, Cloud Run rollback, stuck-story triage, manual resume, Firestore restore, build failures, OOM response, recreate-alerting). Out-of-band gcloud actions also done: Firestore PITR (7-day window) + daily backup schedule, Cloud Scheduler retry config (3 attempts, 30s-5m backoff), email notification channel, 2 log-based metrics (`sweep_failures`/`storybook_api_errors`), 2 monitoring alert policies (sweep-orphans-error + storybook-api-error-rate). Cloud Build failure alert documented in `recreate-alerting.md` with the recipe but NOT YET CREATED. OIDC migration for sweep auth deferred to a future FC. Adversarial review caught 2 BLOCKERs (bogus `gcloud firestore documents` syntax in two runbooks; `mint-spike-token.js` referenced but untracked) and 4 HIGHs (Scheduler-pause-during-rotation, capture-prior-version-before-disable, OOM filter wrong, cold-start caveat in rollback); all fixed → CONFIRMED-CLEAN.
+
+- **Plan:** [docs/plans/fc-032.md](plans/fc-032.md)
+- **PR:** [#38](https://github.com/memon1987/ai-storybook-app/pull/38) (squash-merged as `efe8784`)
+- **Parent FC:** FC-017 (`docs/plans/fc-017.md`)
+- **Investigation:** [docs/investigations/fc-017-retrospective-2026-06-23.md](investigations/fc-017-retrospective-2026-06-23.md)
+
+### FC-031: FC-017 mobile hardening — Done 2026-06-23
+
+Sub-FC of FC-017. Closes R2 + R4 user-visible residuals from the 2026-06-23 system-level retrospective. Library `useQuery` now polls every 15s while any non-terminal row exists (was: stale forever — directly contradicted the FC-017 plan's user promise). `navigatedRef` keyed on `(id, attempt)` (was: stranded the user on /generating after a Resume-then-success cycle). Initial `progress` field populated synchronously at doc-create (eliminates the silent-queued window). Retry budget: mobile reads `attempt` and caps Resume at 3; safety-blocked failures suppress Resume entirely + show "Create a new story" CTA (closes the ~$0.50-$1.10/Resume cost-loop). Adversarial review caught a HIGH-1 reintroduction of the FC-025 B-4 nested-`serverTimestamp` footgun (sentinel inside a map literal in the initial-progress write); fixed by splitting `set()` from a dot-notation `update()` and adding `'queued'` to GenerationPhase as the honest pre-claim value. CONFIRMED-CLEAN. Mobile changes ship on the next EAS build.
+
+- **Plan:** [docs/plans/fc-031.md](plans/fc-031.md)
+- **PR:** [#36](https://github.com/memon1987/ai-storybook-app/pull/36) (squash-merged as `47e6b00`)
+- **Parent FC:** FC-017 (`docs/plans/fc-017.md`)
+- **Investigation:** [docs/investigations/fc-017-retrospective-2026-06-23.md](investigations/fc-017-retrospective-2026-06-23.md)
+
+### FC-030: FC-017 corruption-class hotfix — Done 2026-06-23
+
+Sub-FC of FC-017. Closes the duplicate-pages-in-subcollection corruption class found by R1 BLOCKERs 1-3 of the 2026-06-23 system-level retrospective. Four defense-in-depth changes: (1) **deterministic page-doc IDs** at [worker.ts:387](https://github.com/memon1987/ai-storybook-app/blob/main/backend/src/services/worker.ts#L387) (idempotency floor — closes the corruption class under ANY double-execution path including the ones we haven't found yet); (2) **sweep transactional re-read** with per-doc `runTransaction` + `.limit(100)` (closes the sweep ↔ stale-lock-takeover race); (3) **SIGTERM-aware finalize** (transaction refuses to overwrite `complete`/`failed`); (4) **`fireWorkerInBackground` transactional catch** with `workerId !== WORKER_ID` predicate (closes UX flicker class; preserves own-process recovery on transient catch-write failure). All three transactional predicates exported as pure-ish functions so tests exercise production code, not inline copies. 17 new behavior tests against an in-memory Firestore double; full suite 51→68 passing. Adversarial review caught HIGH-1 (tests reimplementing predicates) and MEDIUM-1 (bg-catch refusing own-process recovery); both fixed → CONFIRMED-CLEAN.
+
+- **Plan:** [docs/plans/fc-030.md](plans/fc-030.md)
+- **PR:** [#34](https://github.com/memon1987/ai-storybook-app/pull/34) (squash-merged as `cf4c362`)
+- **Parent FC:** FC-017 (`docs/plans/fc-017.md`)
+- **Investigation:** [docs/investigations/fc-017-retrospective-2026-06-23.md](investigations/fc-017-retrospective-2026-06-23.md)
 
 ### FC-017: Story generation reliability — request resumes / async job model — Done 2026-06-23
 
