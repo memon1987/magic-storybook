@@ -36,7 +36,13 @@ gcloud logging metrics create sweep_failures \
 gcloud logging metrics create storybook_api_errors \
   --description="storybook-api Cloud Run errors (FC-017)" \
   --log-filter='resource.type="cloud_run_revision" AND resource.labels.service_name="storybook-api" AND severity>=ERROR'
+
+gcloud logging metrics create cloud_build_failures \
+  --description="Cloud Build failed deploys (FC-032)" \
+  --log-filter='resource.type="build" AND severity>=ERROR AND jsonPayload.status="FAILURE"'
 ```
+
+**Gotcha:** newly-created log-based metrics take ~1-10 min to become queryable. If the policy-create step below fails with `Cannot find metric(s) that match type = "logging.googleapis.com/user/<name>"`, wait 30s-2min and retry. The `until/sleep` loop in the audit trail at the bottom of this file is the recipe.
 
 ## Step 3 — Monitoring policies
 
@@ -149,16 +155,17 @@ Expected (after Step 3):
 - 2 log-based metrics.
 - 1 email channel.
 
-## Live state inventory (as of 2026-06-23)
+## Live state inventory (as of 2026-06-24)
 
 | Resource | Name | Status |
 |---|---|---|
 | Notification channel | `projects/ai-storybook-app-2025/notificationChannels/3857053775445793418` (email → zeshan@tkzmgroup.com) | Active |
 | Log metric | `sweep_failures` | Active |
 | Log metric | `storybook_api_errors` | Active |
+| Log metric | `cloud_build_failures` | Active (created 2026-06-24) |
 | Alert policy | `FC-017 sweep-orphans job ERROR` | Enabled |
 | Alert policy | `storybook-api error rate` | Enabled |
-| Alert policy | `Cloud Build deploy failure (storybook-api)` | **NOT YET CREATED** (filed as FC-032 PR-1 follow-up; recipe above) |
+| Alert policy | `Cloud Build deploy failure (storybook-api)` | Enabled (created 2026-06-24, policy id `4842171722136950381`) |
 
 ## First-24-hours owner
 
@@ -167,3 +174,7 @@ Whoever owns alert-quality iteration for the first 24h: **Zeshan (no one else wi
 ## Audit trail
 
 - 2026-06-23 — initial creation of sweep + Cloud Run policies + log metrics + email channel.
+- 2026-06-24 — added `cloud_build_failures` log-based metric + `Cloud Build deploy failure (storybook-api)` policy. The policy create initially failed with `Cannot find metric(s) that match type = "logging.googleapis.com/user/cloud_build_failures"` because the metric needs ~1-10 min to propagate. Resolved by polling:
+  ```bash
+  until gcloud monitoring policies create --policy-from-file=cloud-build-failed.yaml 2>&1 | grep -qE "^Created|already exists"; do sleep 30; done
+  ```
