@@ -338,7 +338,25 @@ _(Implemented/reviewed under the label "FC-029"; renumbered to FC-035 after a co
 
 ---
 
-## Completed
+### FC-036: Playful, progress-driven story loading screen
+
+**Status:** Consideration
+**Size estimate:** M
+**Owner:** Zeshan
+**Plan file:** not yet
+
+**Problem / opportunity:** Story generation takes ~2–5 min, but [mobile/app/story/[id]/generating.tsx](../mobile/app/story/[id]/generating.tsx) currently shows just a spinner + a single `progress.message` string. For a kids' app, that wait should be *delightful* and should communicate real, honest progress. The FC-017 worker already streams rich step-by-step state into the Firestore doc that the screen subscribes to via `subscribeToStory` — character refs, cast lineup, title page, then pages 1..N landing in `pageUrls` incrementally, plus `attempt`/`status`/`progress.message`. That existing signal can drive a real progress bar instead of an indeterminate spinner.
+
+**Idea:** replace the spinner with a playful, animated progress experience — e.g. a determinate progress bar tied to actual completed steps (refs → cast → title → each page), with thematic micro-animations (characters/pages "appearing" as they generate, a peek of each illustration as its `pageUrls` entry lands, friendly copy that narrates what's happening: "Drawing {childName}…", "Painting page 3…"). Reanimated is already in the project (and Skia, if we want richer effects).
+
+**Open questions:**
+- Drive the bar from real Firestore signals (count of `pageUrls` vs expected page count + the pre-page steps) vs an estimated timer — or a blend (real milestones, time-smoothed between them)?
+- Show generated page thumbnails as they stream in, or keep it abstract/illustrative? (Thumbnails are honest + engaging but reveal the story before reading.)
+- How to weight the long char-ref stage (~the latency bottleneck per FC-016) so the bar doesn't stall early?
+- Reduced-motion / accessibility fallback.
+- Keep the existing failed/resume/retry-budget states (FC-031) intact — this is a redesign of the *in-progress* state only.
+
+**Depends on / relates to:** FC-017 (the live-progress data contract this builds on), FC-016 (char-ref latency — informs progress weighting).
 
 ### FC-032: FC-017 ops floor baseline — Done 2026-06-24
 
