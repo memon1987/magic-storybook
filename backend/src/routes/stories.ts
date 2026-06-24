@@ -50,7 +50,10 @@ export function pickClientFields(data: Record<string, unknown>): Record<string, 
 }
 
 const router = Router();
-const db = new Firestore();
+// ignoreUndefinedProperties: drop undefined optional fields on write rather
+// than throw (e.g. a story page's absent soundEffects/emphasizedWords). Keep
+// consistent with the worker's Firestore client. See worker.ts for context.
+const db = new Firestore({ ignoreUndefinedProperties: true });
 
 // Apply auth middleware to all routes
 router.use(authMiddleware);
