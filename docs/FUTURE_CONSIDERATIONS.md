@@ -290,7 +290,7 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-029: Social sign-in — Google + Apple
 
-**Status:** Done (code on `main`: `0086f73` + lazy-load PR #35 `ff2e5ee`) — console setup + EAS build handoff pending. See plan Execution section.
+**Status:** iOS code+config+build-fixes on `main` (feat `0086f73`, lazy-load #35, OAuth IDs #37, lockfile #39, static-frameworks #40). Simulator build `b8914890` ✓. TestFlight build + on-device verify owner-driven (queued 2026-06-23); Android deferred. See plan Execution.
 **Size estimate:** M
 **Owner:** Zeshan
 **Plan file:** [docs/plans/fc-029.md](plans/fc-029.md)
