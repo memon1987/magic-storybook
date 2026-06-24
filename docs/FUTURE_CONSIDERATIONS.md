@@ -398,6 +398,32 @@ _(Implemented/reviewed under the label "FC-029"; renumbered to FC-035 after a co
 
 ---
 
+### FC-039: iOS-style library edit mode (jiggle + delete badge)
+
+**Status:** Consideration
+**Size estimate:** M
+**Owner:** Zeshan
+**Plan file:** not yet
+
+**Problem / opportunity:** Deleting a story works today but is unintuitive: long-pressing a thumbnail ([mobile/app/(tabs)/index.tsx](../mobile/app/(tabs)/index.tsx) `handleStoryLongPress`) pops a confirm `Alert` and deletes via the existing `deleteStory` mutation. There's no visual affordance that long-press does anything, and no discoverable "delete" target. Replace it with the familiar **iOS home-screen edit mode**.
+
+**Idea:**
+- **Long-press any thumbnail → enter edit mode:** every card starts a subtle continuous **jiggle** (small rotation oscillation, staggered phase per card so they're not in sync) — Reanimated is already in the project.
+- Each card shows a **delete badge** (a "−"/"✕" in a circle) at the **top-left**.
+- **Tap the badge → delete** that story (reuse the existing `deleteStory` API + react-query `deleteMutation`, with optimistic removal). Tapping a card body while editing does NOT open the reader.
+- **Exit edit mode** via a **Done** button (header), tapping empty space, or back gesture; jiggle stops, badges hide, normal tap-to-open resumes.
+- Light **haptics** on entering edit mode and on delete.
+
+**Open questions:**
+- Confirm-on-delete vs immediate-with-undo? Stories are expensive to regenerate (~$0.50–$1 + minutes), so a confirm step or a brief undo window is safer than iOS's instant delete. Recommend keep a lightweight confirm or a 3-5s undo snackbar.
+- Reduced-motion / accessibility: disable the jiggle and instead surface an explicit **Edit/Done** toggle with static, clearly-labeled delete buttons.
+- Where the Done affordance lives (header right) and how it coexists with the existing count badge.
+- Reuse vs replace the current long-press `Alert` path (replace — but keep delete reachable for screen readers).
+
+**Relates to:** builds on the existing `deleteStory` flow ([api.ts](../mobile/services/api.ts) `deleteStory` → `DELETE /api/stories/:id`) and `StoryCard` ([mobile/components/StoryCard.tsx](../mobile/components/StoryCard.tsx)); FC-026 (responsive grid this renders in).
+
+---
+
 ## Completed
 
 ### FC-032: FC-017 ops floor baseline — Done 2026-06-24
