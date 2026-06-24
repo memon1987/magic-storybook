@@ -358,6 +358,48 @@ _(Implemented/reviewed under the label "FC-029"; renumbered to FC-035 after a co
 
 **Depends on / relates to:** FC-017 (the live-progress data contract this builds on), FC-016 (char-ref latency — informs progress weighting).
 
+---
+
+### FC-037: Content safety guards (kid-safe input + generation)
+
+**Status:** Consideration
+**Size estimate:** M–L
+**Owner:** Zeshan
+**Plan file:** not yet
+
+**Problem / opportunity:** The audience is **children**; the users entering input are parents. Free-text fields — `childName` and `favoriteAnimal` in [mobile/app/(tabs)/create.tsx](../mobile/app/(tabs)/create.tsx) — flow directly into the Gemini text + image prompts. Today the **only** safety mechanism is reactive: [worker.ts](../backend/src/services/worker.ts) maps Gemini's own "safety/blocked/policy" errors to the `safety_blocked` failure code. There are **no explicit Gemini `safetySettings`** on the generate calls (config is just `responseModalities`/temperature), **no proactive input validation/blocklist**, and **no output moderation** before a story is persisted and shown to a child. A parent could enter inappropriate input (deliberately, or a typo/autocorrect) and get either an opaque failure or — worse — borderline content baked into a child-facing book.
+
+**Idea (layered defense):**
+- **Input layer:** validate/normalize the free-text fields on client + server — length caps, character allowlist, profanity/unsafe-term/PII blocklist — with friendly inline rejection *before* submit.
+- **Generation layer:** set explicit Gemini `safetySettings` (HarmCategory thresholds, erring strict) on **both** the story-text (`generateStory`) and image (`generateContent`) calls — don't rely on defaults.
+- **Output layer:** moderate the generated story text (and ideally a vision check on the images) before persisting; route violations through the existing `safety_blocked` path.
+- **UX:** keep the existing `safety_blocked` copy; add a clear "let's keep it kid-friendly" message on input rejection.
+
+**Open questions:**
+- Moderation mechanism for output (Gemini safety-rating metadata vs a dedicated moderation API vs a curated blocklist)?
+- Where to draw the strictness line + false-positive tolerance (it's a kids' app — err strict)?
+- PII: `childName` is a real child's name — review storage/logging scope.
+- COPPA / App Store Kids-category implications, since the audience is children.
+
+---
+
+### FC-038: Library cover thumbnails clipped (contain, not cover)
+
+**Status:** Consideration
+**Size estimate:** S
+**Owner:** Zeshan
+**Plan file:** not yet
+
+**Problem / opportunity:** On the library grid, story covers are visibly cut off. [mobile/components/StoryCard.tsx](../mobile/components/StoryCard.tsx) renders the cover with `contentFit="cover"` (line 41) inside a `coverWrap` pinned to `aspectRatio: 3/4` (line 114). `cover` **crops** the Gemini-generated title image to fill the 3:4 box, and since that image isn't 3:4, the crop slices off edges — the title text and characters. This is the **same clipping class FC-026 fixed in the reader** (which switched `fit="cover"` → `fit="contain"` + a blurred ambient backdrop so baked-in text is never cropped).
+
+**Idea:** mirror the FC-026 reader fix on the card — `contentFit="contain"` so the whole cover fits, with a fill (or a blurred backdrop of the same image) behind the letterbox so it still looks polished. Alternative: pin the box `aspectRatio` to the generated image's actual ratio. One file: `StoryCard.tsx` (plus an optional backdrop, as FC-026 did).
+
+**Relates to:** FC-026 (same contain-vs-cover clipping fix in the reader), FC-028 (pinning the backend image aspect ratio would shrink the letterbox bands).
+
+---
+
+## Completed
+
 ### FC-032: FC-017 ops floor baseline — Done 2026-06-24
 
 Sub-FC of FC-017. Closes R3 from the 2026-06-23 system-level retrospective ("operational posture surrounding FC-017 is essentially zero"). Two repo-side changes: `cloudbuild.yaml` gains a `npm ci`+`npm test` CI test gate (broken tests no longer deploy) and a pinned `--max-instances=20`/`--min-instances=0` (was a manual annotation that next deploy would have silently regressed to default 1000). Nine runbooks under `docs/runbooks/` cover the most-likely operational scenarios (sweep failure, secret rotation, Cloud Run rollback, stuck-story triage, manual resume, Firestore restore, build failures, OOM response, recreate-alerting). Out-of-band gcloud actions also done: Firestore PITR (7-day window) + daily backup schedule, Cloud Scheduler retry config (3 attempts, 30s-5m backoff), email notification channel, 2 log-based metrics (`sweep_failures`/`storybook_api_errors`), 2 monitoring alert policies (sweep-orphans-error + storybook-api-error-rate). Cloud Build failure alert documented in `recreate-alerting.md` with the recipe but NOT YET CREATED. OIDC migration for sweep auth deferred to a future FC. Adversarial review caught 2 BLOCKERs (bogus `gcloud firestore documents` syntax in two runbooks; `mint-spike-token.js` referenced but untracked) and 4 HIGHs (Scheduler-pause-during-rotation, capture-prior-version-before-disable, OOM filter wrong, cold-start caveat in rollback); all fixed → CONFIRMED-CLEAN.
