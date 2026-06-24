@@ -68,7 +68,13 @@ export const WORKER_ID = `${process.env.K_REVISION ?? 'local'}-${uuid()}`;
 // FC-025 M-7: module-scope Firestore client. Previously instantiated inside
 // runStoryWorker on every call, leaking gRPC connection pools under
 // concurrency=4 — directly compounding the Phase 1 OOM hypothesis.
-const db = new Firestore();
+//
+// ignoreUndefinedProperties: GeneratedStory pages carry optional fields
+// (soundEffects/emphasizedWords) that gemini.ts normalizes to `undefined`
+// when empty/absent. saveStoryText writes the raw story object, and Firestore
+// rejects `undefined` values by default — which failed the whole worker. This
+// drops undefined optional fields on write (the desired omit behavior).
+const db = new Firestore({ ignoreUndefinedProperties: true });
 
 // FC-025 B-1: in-process dedup. Same-process concurrent calls on the same
 // storyId share one Promise — the second caller awaits the first's result

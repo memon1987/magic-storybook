@@ -20,7 +20,9 @@ import { timingSafeEqual } from 'node:crypto';
 import { FailureCode, StoryDocument } from '../types';
 
 const router = Router();
-const db = new Firestore();
+// ignoreUndefinedProperties: drop undefined optional fields on write rather
+// than throw. Keep consistent with the worker / stories Firestore clients.
+const db = new Firestore({ ignoreUndefinedProperties: true });
 
 // Mark a generating doc as orphaned if its last heartbeat is older than this.
 // Set well above the worker's 90s stale-lock threshold so we don't fight an
