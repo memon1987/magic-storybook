@@ -285,7 +285,7 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-036: Playful, progress-driven story loading screen
 
-**Status:** Plan published
+**Status:** Executing — [PR #44](https://github.com/memon1987/ai-storybook-app/pull/44)
 **Size estimate:** M
 **Owner:** Zeshan
 **Plan file:** [docs/plans/fc-036.md](plans/fc-036.md)
