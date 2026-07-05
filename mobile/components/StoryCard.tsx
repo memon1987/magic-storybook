@@ -38,7 +38,20 @@ export function StoryCard({ story, onPress, onLongPress, style }: StoryCardProps
     >
       <View style={[styles.coverWrap, { backgroundColor: palette.colors.background }]}>
         {coverUrl ? (
-          <Image source={{ uri: coverUrl }} style={styles.cover} contentFit="cover" />
+          // FC-038: mirror the FC-026 reader fix at card scale — blurred
+          // cover-fit backdrop + dim + contain foreground, so the baked-in
+          // title text is never cropped by the fixed 3:4 box. Both layers
+          // share the same URI, so expo-image downloads/decodes it once.
+          <>
+            <Image
+              source={{ uri: coverUrl }}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+              blurRadius={16}
+            />
+            <View style={[StyleSheet.absoluteFill, styles.coverDim]} />
+            <Image source={{ uri: coverUrl }} style={styles.cover} contentFit="contain" />
+          </>
         ) : (
           <View style={styles.placeholder}>
             <Ionicons
@@ -116,6 +129,11 @@ const styles = StyleSheet.create({
   cover: {
     width: '100%',
     height: '100%',
+  },
+  // FC-038: mutes the blurred backdrop so the sharp contain-fit foreground
+  // pops (reader uses 0.35; cards sit on a light UI, so 0.25).
+  coverDim: {
+    backgroundColor: 'rgba(0,0,0,0.25)',
   },
   placeholder: {
     flex: 1,
