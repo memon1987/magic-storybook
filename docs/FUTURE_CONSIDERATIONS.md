@@ -220,7 +220,7 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-024: Stand up a mobile test runner (vitest / jest-expo)
 
-**Status:** Plan published
+**Status:** Executing (PR #43)
 **Size estimate:** M
 **Owner:** Zeshan
 **Plan file:** [docs/plans/fc-024.md](plans/fc-024.md)
