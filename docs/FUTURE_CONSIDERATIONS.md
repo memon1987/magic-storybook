@@ -152,24 +152,6 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ---
 
-### FC-019: Re-evaluate text rendering paradigm (text-in-image spike)
-
-**Status:** Spike complete (PRs #15–#20 merged). **Decision: bake text into the image (Flash) +
-OCR detect-and-regenerate; reject Pro (char drift); exclude Recraft.** Productionization tracked in
-**FC-020**. See `docs/investigations/fc-019-text-paradigm-comparison-2026-05-16.md`.
-**Size estimate:** M for the spike; L for the migration (FC-020)
-**Owner:** Zeshan / Claude
-**Plan file:** `docs/plans/fc-019.md`
-
-**Problem / opportunity:** After shipping FC-015 (Skia overlay) and FC-018 (refined overlay), user feedback is that the overlay paradigm fundamentally doesn't feel "like a true kids book written and illustrated by an author." Real kids' books co-design text + illustration — text is part of the composition, not labeled on top. Plan: backend-only spike comparing current pipeline (Gemini Flash + Skia overlay) vs Gemini 3 Pro Image (text baked in, ~94-96% accuracy, Google's forward image lane) vs Recraft V4 (purpose-built for kids'-book illustration WITH multi-line text — only model with this combo per multiple 2026 benchmarks). Feature-flagged behind env vars; no production traffic touched. Comparison gates the migration decision.
-
-**Open questions:**
-- Will Recraft V4 character consistency hold up when fed Gemini's character refs as style refs?
-- Does Pro Image's latency cost (real ~24-35s/img vs Flash ~12-30s typical) outweigh its 4-6% text-accuracy edge?
-- Is GPT Image 1.5 worth a follow-up spike if Pro + Recraft both fall short?
-
----
-
 ### FC-016: Story generation latency reduction (deep research)
 
 **Status:** Executing — Phase 1 instrumentation merged (PR #23, `f5f9cb5`, 2026-05-27); Phase 1 baseline sweep + investigation note + Phases 2-4 still pending
@@ -253,19 +235,6 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
-### FC-026: Responsive layout Phase 1 — critical device-layout bugs
-
-**Status:** Executing
-**Size estimate:** M
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-026.md](plans/fc-026.md)
-
-**Problem / opportunity:** On iPhone 17 Pro Max two screens render wrong because layout is hardcoded to one form factor. (1) The Library "zooms into" just the first two stories in landscape — `mobile/app/(tabs)/index.tsx` hardcodes `numColumns={2}` with `flex:1` cells whose cover is `aspectRatio:3/4`, so doubling the row width doubles card size and only the first row fits. (2) The reader clips baked-in narration text — `components/PageCurl/Curl.tsx` draws every image `fit="cover"`, cropping edges, and landscape device ratios span ~1.33:1 (iPad) to ~2.16:1 (Pro Max) with no pinned backend aspect ratio. Broader goal: render well across the full Apple device matrix, both orientations.
-
-**Scope (Phase 1):** add root `SafeAreaProvider`; new minimal `useResponsive()` hook (+ pure `computeGrid`); reactive library grid; reader → `fit="contain"` with a blurred ambient backdrop (guarantees no clipped text on every device *and* every existing baked image). iPad/all-screen polish deferred to **FC-027**; optional backend aspect-ratio pin to **FC-028**.
-
----
-
 ### FC-027: Responsive layout Phase 2 — iPad / landscape polish
 
 **Status:** Consideration
@@ -285,17 +254,6 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 **Plan file:** not yet
 
 **Problem / opportunity:** With FC-026's reader `contain`, images letterbox by the gap between the generated ratio and the device ratio. Pinning `config.imageConfig.aspectRatio` (~16:9, verified against the installed `@google/genai` + `gemini-3.1-flash-image-preview` allowed ratios) on all four image calls in `backend/src/services/gemini.ts` would shrink those bands for **new** stories. Does not affect existing stories (baked images frozen) — the mobile `contain` change already covers those, which is why this is optional polish, not a fix.
-
----
-
-### FC-029: Social sign-in — Google + Apple
-
-**Status:** iOS code+config+build-fixes on `main` (feat `0086f73`, lazy-load #35, OAuth IDs #37, lockfile #39, static-frameworks #40). Simulator build `b8914890` ✓. TestFlight build + on-device verify owner-driven (queued 2026-06-23); Android deferred. See plan Execution.
-**Size estimate:** M
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-029.md](plans/fc-029.md)
-
-**Problem / opportunity:** The login screen's "Continue with Google" button was a `Alert.alert('Coming soon')` stub; register had no social option. Social sign-in lowers signup friction. We're on the Firebase **Web** JS SDK v11, whose `signInWithPopup`/`signInWithRedirect` don't work in React Native — so each provider acquires a token natively, then exchanges it via `signInWithCredential`. Google uses the native account sheet (`@react-native-google-signin/google-signin`); Apple uses `expo-apple-authentication` with a SHA-256 nonce. Because offering Google on iOS triggers App Store Guideline 4.8, **Sign in with Apple ships in the same FC** (iOS-only) so the next prod submission is compliant. Sessions persist via the existing `getReactNativePersistence` init (PR #32). Console setup (OAuth client IDs, provider enablement, Apple capability, Android SHA-1) is a prerequisite handoff; code lands with placeholder client IDs.
 
 ---
 
@@ -322,19 +280,6 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 **Source:** R3 M-2 from [docs/investigations/fc-017-retrospective-2026-06-23.md](investigations/fc-017-retrospective-2026-06-23.md)
 
 **Problem / opportunity:** Phase 1's `emitStageEvent`/`emitCallEvent` structured JSON lands in Cloud Logging via `console.log(JSON.stringify(...))` and is never read. FC-032 ships *failure*-detection alerts but not *latency*-distribution charts. A Cloud Monitoring dashboard with log-based-metrics extracting `latencyMs` by stage + `outcome=failure` counts by stage closes the gap between "instrumentation captured" and "instrumentation observed." Defer until the first incident triage where the absence of a dashboard would have made things faster.
-
----
-
-### FC-035: Reader — decouple tap from navigation + backward page-curl
-
-**Status:** Executing
-**Size estimate:** M
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-035.md](plans/fc-035.md)
-
-_(Implemented/reviewed under the label "FC-029"; renumbered to FC-035 after a concurrent session merged its own FC-029 — Google/Apple social sign-in — first. Branch `feature/fc-029-reader-tap-backward-curl` / PR #33 / git history keep the old label.)_
-
-**Problem / opportunity:** In the reader, tapping was overloaded — it toggled the info bars AND navigated via hard-coded zones (left 25% = prev, right 25% = next, center 50% = toggle), so a tap meant to reveal the bars frequently landed in an edge zone and accidentally flipped the page (reported on build 11). Fix: (1) a tap anywhere only toggles the controls — never navigates; (2) add a backward page-curl swipe (the curl was forward-only). Reuses the existing GLSL shader for backward (curl-layer top = previous image, `pointer` 0→width sweeps the fold left→right so the previous page enters from the left). Two files: `Curl.tsx`, `read.tsx`.
 
 ---
 
@@ -426,6 +371,27 @@ _(Implemented/reviewed under the label "FC-029"; renumbered to FC-035 after a co
 
 ## Completed
 
+### FC-029: Social sign-in — Google + Apple — Done 2026-06-24 (iOS; Android deferred)
+
+Replaced the "Continue with Google" stub with real Google + Apple sign-in on iOS (Apple required by App Store Guideline 4.8 once Google is offered). Native token acquisition (`@react-native-google-signin/google-signin` account sheet; `expo-apple-authentication` with SHA-256 nonce) exchanged via Firebase `signInWithCredential`; sessions persist via the existing `getReactNativePersistence` init. Feature landed as `0086f73` (swept to main without its own PR by a concurrent session — process deviation documented in the plan); hardening/wiring followed via PR #35 (lazy-load native modules), #37 (real OAuth client IDs), #39 (npm-10 lockfile for EAS), #40 (static frameworks for AppCheckCore). Build 12 failed on a provisioning profile lacking the Sign-in-with-Apple entitlement; interactive rebuild **shipped as production EAS build 13 → TestFlight (2026-06-24)**. Residual: Android Google client (needs first Android build's keystore SHA-1); on-device social-flow verification owner-driven.
+
+- **Plan:** [docs/plans/fc-029.md](plans/fc-029.md)
+- **Commits/PRs:** `0086f73` (feature), [#35](https://github.com/memon1987/ai-storybook-app/pull/35) → `ff2e5ee`, [#37](https://github.com/memon1987/ai-storybook-app/pull/37) → `629167a`, [#39](https://github.com/memon1987/ai-storybook-app/pull/39) → `c8990af`, [#40](https://github.com/memon1987/ai-storybook-app/pull/40) → `992cb79`
+
+### FC-035: Reader — decouple tap from navigation + backward page-curl — Done 2026-06-23
+
+Tap anywhere in the reader now only toggles the controls (never navigates — kills the accidental page-flips reported on build 11), and the page-curl works backward: drag right and the previous page curls in from the left, reusing the existing GLSL shader (curl-layer top = previous image, `pointer` 0→width). Adversarial review caught a BLOCKER (backward-cancel bleed through contain margins) + HIGH (gestures rebuilt every render); fixed → CONFIRMED-CLEAN. Shipped in production EAS build 13 (2026-06-24). _(Implemented under the label "FC-029" pre-renumbering; branch/PR history keeps the old label.)_
+
+- **Plan:** [docs/plans/fc-035.md](plans/fc-035.md)
+- **PR:** [#33](https://github.com/memon1987/ai-storybook-app/pull/33) (squash-merged as `8336571`)
+
+### FC-026: Responsive layout Phase 1 — critical device-layout bugs — Done 2026-06-23
+
+Fixed the two device-layout bugs on iPhone 17 Pro Max: (1) landscape Library "zoom" — replaced hardcoded `numColumns={2}` with `useResponsive()`/`computeGrid` and a reactive, remount-keyed grid; (2) reader clipping baked-in narration text — `fit="cover"` → `fit="contain"` plus a single blurred ambient backdrop drawn outside the pd-scaled curl shader layer (fixes new *and* existing stories). Review trail: REQUEST_CHANGES (blur coordinate-space mismatch) → REGRESSION-FOUND (next-page bleed at rest) → CONFIRMED-CLEAN. Shipped in EAS build 11, superseded by production build 13. Follow-ups: FC-027 (iPad polish), FC-028 (backend aspect-ratio pin).
+
+- **Plan:** [docs/plans/fc-026.md](plans/fc-026.md)
+- **PR:** [#28](https://github.com/memon1987/ai-storybook-app/pull/28) (squash-merged as `1fa47c2`)
+
 ### FC-032: FC-017 ops floor baseline — Done 2026-06-24
 
 Sub-FC of FC-017. Closes R3 from the 2026-06-23 system-level retrospective ("operational posture surrounding FC-017 is essentially zero"). Two repo-side changes: `cloudbuild.yaml` gains a `npm ci`+`npm test` CI test gate (broken tests no longer deploy) and a pinned `--max-instances=20`/`--min-instances=0` (was a manual annotation that next deploy would have silently regressed to default 1000). Nine runbooks under `docs/runbooks/` cover the most-likely operational scenarios (sweep failure, secret rotation, Cloud Run rollback, stuck-story triage, manual resume, Firestore restore, build failures, OOM response, recreate-alerting). Out-of-band gcloud actions also done: Firestore PITR (7-day window) + daily backup schedule, Cloud Scheduler retry config (3 attempts, 30s-5m backoff), email notification channel, 2 log-based metrics (`sweep_failures`/`storybook_api_errors`), 2 monitoring alert policies (sweep-orphans-error + storybook-api-error-rate). Cloud Build failure alert documented in `recreate-alerting.md` with the recipe but NOT YET CREATED. OIDC migration for sweep auth deferred to a future FC. Adversarial review caught 2 BLOCKERs (bogus `gcloud firestore documents` syntax in two runbooks; `mint-spike-token.js` referenced but untracked) and 4 HIGHs (Scheduler-pause-during-rotation, capture-prior-version-before-disable, OOM filter wrong, cold-start caveat in rollback); all fixed → CONFIRMED-CLEAN.
@@ -487,6 +453,14 @@ Fixed a reported bug where the story reader blocked rendering behind a full-scre
 
 - **Plan:** [docs/plans/fc-023.md](plans/fc-023.md)
 - **PR:** [#25](https://github.com/memon1987/ai-storybook-app/pull/25) (squash-merged as `9df56e7`)
+
+### FC-019: Re-evaluate text rendering paradigm (text-in-image spike) — Done 2026-05-16
+
+Backend-only spike comparing the then-current pipeline (Gemini Flash + Skia overlay) vs Gemini 3 Pro Image (text baked in) vs Recraft V4. **Decision: bake text into the image (Flash) + OCR detect-and-regenerate; reject Pro (character drift); exclude Recraft.** Productionized by FC-020 (which also deleted the Skia overlay).
+
+- **Plan:** [docs/plans/fc-019.md](plans/fc-019.md)
+- **Investigation:** [docs/investigations/fc-019-text-paradigm-comparison-2026-05-16.md](investigations/fc-019-text-paradigm-comparison-2026-05-16.md)
+- **PRs:** [#11](https://github.com/memon1987/ai-storybook-app/pull/11) (spike machinery, `1499316`), #15–#20 (comparison runs)
 
 ### FC-020: Baked-in text + OCR text-repair; delete Skia overlay — Done 2026-05-24
 
