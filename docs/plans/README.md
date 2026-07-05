@@ -24,5 +24,14 @@ Copy `_template.md` in this directory to start a new plan.
 
 _Active (not-yet-Done) plans. Completed plans are indexed in the "Completed" section of [../FUTURE_CONSIDERATIONS.md](../FUTURE_CONSIDERATIONS.md), each entry linking its plan file._
 
-- [fc-016.md](fc-016.md) — FC-016: Story generation latency reduction, status: Executing (Phase 1 merged; Phases 2–4 pending)
+All plans below (except fc-016, which has human decision gates) carry an `## Execution contract` and execute per [AUTONOMOUS_EXECUTION.md](AUTONOMOUS_EXECUTION.md) — isolated worktree/branch, goal-loop to green, two independent adversarial reviews + confirmation, stop at ready-to-merge.
+
+- [fc-016.md](fc-016.md) — FC-016: Story generation latency reduction, status: Executing (Phase 1 merged; Phases 2–4 pending; partial-autonomy contract)
+- [fc-024.md](fc-024.md) — FC-024: Mobile test runner (jest-expo) + GitHub Actions CI, status: Plan published
+- [fc-027.md](fc-027.md) — FC-027: Responsive layout Phase 2 (iPad polish), status: Plan published
+- [fc-028.md](fc-028.md) — FC-028: Pin backend illustration aspect ratio, status: Plan published
+- [fc-036.md](fc-036.md) — FC-036: Progress-driven story loading screen, status: Plan published
+- [fc-037.md](fc-037.md) — FC-037: Content safety guards, status: Plan published
+- [fc-038.md](fc-038.md) — FC-038: Library cover contain + blurred backdrop, status: Plan published
+- [fc-039.md](fc-039.md) — FC-039: iOS-style library edit mode, status: Plan published
 - [fc-040.md](fc-040.md) — FC-040: Reader page-turn polish (tap-to-turn animated curl), status: Plan published

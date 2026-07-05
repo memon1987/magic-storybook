@@ -220,10 +220,10 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-024: Stand up a mobile test runner (vitest / jest-expo)
 
-**Status:** Consideration
+**Status:** Plan published
 **Size estimate:** M
-**Owner:** unassigned
-**Plan file:** not yet
+**Owner:** Zeshan
+**Plan file:** [docs/plans/fc-024.md](plans/fc-024.md)
 
 **Problem / opportunity:** The `mobile/` package has **zero** test infrastructure — no `test` script, no vitest/jest, no test files (verified 2026-06-22 during FC-022). Pure logic that's easy to get wrong currently ships verified only by manual walkthrough: e.g. FC-022's `readerPageLabel` page-counter helper (`components/PageCurl/paging.ts` — cover/end-page offset math), the `services/api.ts` auth-token interceptor, and `useAuth` state transitions. A runner would let us unit-test extracted pure helpers immediately and add component tests for the reader over time. (Backend already uses Vitest — see FC-020.)
 
@@ -237,10 +237,10 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-027: Responsive layout Phase 2 — iPad / landscape polish
 
-**Status:** Consideration
+**Status:** Plan published
 **Size estimate:** M
-**Owner:** unassigned
-**Plan file:** not yet
+**Owner:** Zeshan
+**Plan file:** [docs/plans/fc-027.md](plans/fc-027.md)
 
 **Problem / opportunity:** After FC-026 fixes the two critical bugs, the rest of the app still assumes a phone form factor on iPad. Finish `useResponsive` (`scale`, `contentMaxWidth`, `deviceClass`); add a `ResponsiveContainer` (center + max-width) for login/register/settings so cards/rows don't stretch edge-to-edge; fix `create.tsx` art-style grid `width:'31%'` (3-up phone → 4-up tablet) and cap the `'70%'` generating overlay; optional notch gutters on reader top/bottom bars.
 
@@ -248,10 +248,10 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-028: Pin backend image aspect ratio (optional)
 
-**Status:** Consideration
+**Status:** Plan published
 **Size estimate:** S
-**Owner:** unassigned
-**Plan file:** not yet
+**Owner:** Zeshan
+**Plan file:** [docs/plans/fc-028.md](plans/fc-028.md)
 
 **Problem / opportunity:** With FC-026's reader `contain`, images letterbox by the gap between the generated ratio and the device ratio. Pinning `config.imageConfig.aspectRatio` (~16:9, verified against the installed `@google/genai` + `gemini-3.1-flash-image-preview` allowed ratios) on all four image calls in `backend/src/services/gemini.ts` would shrink those bands for **new** stories. Does not affect existing stories (baked images frozen) — the mobile `contain` change already covers those, which is why this is optional polish, not a fix.
 
@@ -285,10 +285,10 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-036: Playful, progress-driven story loading screen
 
-**Status:** Consideration
+**Status:** Plan published
 **Size estimate:** M
 **Owner:** Zeshan
-**Plan file:** not yet
+**Plan file:** [docs/plans/fc-036.md](plans/fc-036.md)
 
 **Problem / opportunity:** Story generation takes ~2–5 min, but [mobile/app/story/[id]/generating.tsx](../mobile/app/story/[id]/generating.tsx) currently shows just a spinner + a single `progress.message` string. For a kids' app, that wait should be *delightful* and should communicate real, honest progress. The FC-017 worker already streams rich step-by-step state into the Firestore doc that the screen subscribes to via `subscribeToStory` — character refs, cast lineup, title page, then pages 1..N landing in `pageUrls` incrementally, plus `attempt`/`status`/`progress.message`. That existing signal can drive a real progress bar instead of an indeterminate spinner.
 
@@ -307,10 +307,10 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-037: Content safety guards (kid-safe input + generation)
 
-**Status:** Consideration
+**Status:** Plan published
 **Size estimate:** M–L
 **Owner:** Zeshan
-**Plan file:** not yet
+**Plan file:** [docs/plans/fc-037.md](plans/fc-037.md)
 
 **Problem / opportunity:** The audience is **children**; the users entering input are parents. Free-text fields — `childName` and `favoriteAnimal` in [mobile/app/(tabs)/create.tsx](../mobile/app/(tabs)/create.tsx) — flow directly into the Gemini text + image prompts. Today the **only** safety mechanism is reactive: [worker.ts](../backend/src/services/worker.ts) maps Gemini's own "safety/blocked/policy" errors to the `safety_blocked` failure code. There are **no explicit Gemini `safetySettings`** on the generate calls (config is just `responseModalities`/temperature), **no proactive input validation/blocklist**, and **no output moderation** before a story is persisted and shown to a child. A parent could enter inappropriate input (deliberately, or a typo/autocorrect) and get either an opaque failure or — worse — borderline content baked into a child-facing book.
 
@@ -330,10 +330,10 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-038: Library cover thumbnails clipped (contain, not cover)
 
-**Status:** Consideration
+**Status:** Plan published
 **Size estimate:** S
 **Owner:** Zeshan
-**Plan file:** not yet
+**Plan file:** [docs/plans/fc-038.md](plans/fc-038.md)
 
 **Problem / opportunity:** On the library grid, story covers are visibly cut off. [mobile/components/StoryCard.tsx](../mobile/components/StoryCard.tsx) renders the cover with `contentFit="cover"` (line 41) inside a `coverWrap` pinned to `aspectRatio: 3/4` (line 114). `cover` **crops** the Gemini-generated title image to fill the 3:4 box, and since that image isn't 3:4, the crop slices off edges — the title text and characters. This is the **same clipping class FC-026 fixed in the reader** (which switched `fit="cover"` → `fit="contain"` + a blurred ambient backdrop so baked-in text is never cropped).
 
@@ -345,10 +345,10 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-039: iOS-style library edit mode (jiggle + delete badge)
 
-**Status:** Consideration
+**Status:** Plan published
 **Size estimate:** M
 **Owner:** Zeshan
-**Plan file:** not yet
+**Plan file:** [docs/plans/fc-039.md](plans/fc-039.md)
 
 **Problem / opportunity:** Deleting a story works today but is unintuitive: long-pressing a thumbnail ([mobile/app/(tabs)/index.tsx](../mobile/app/(tabs)/index.tsx) `handleStoryLongPress`) pops a confirm `Alert` and deletes via the existing `deleteStory` mutation. There's no visual affordance that long-press does anything, and no discoverable "delete" target. Replace it with the familiar **iOS home-screen edit mode**.
 
