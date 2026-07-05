@@ -7,7 +7,7 @@
  * /:id/resume). This is the silent-success bug fix surfaced as UX.
  *
  * State machine driven by `status`:
- *   queued | generating       → render progress.message + spinner
+ *   queued | generating       → FC-036 determinate progress bar + captions
  *   complete                  → router.replace to /story/[id]/read
  *   failed                    → render error + Resume + Back-to-library
  *   subscription error        → render error + Back-to-library
@@ -15,17 +15,39 @@
  * "Close — we'll have it ready when you're back" affordance pops to the
  * library; the subscription unsubscribes on unmount. The library renders
  * the story's current status row so the user can come back to it.
+ *
+ * FC-036 — determinate, milestone-blended progress. The pure model lives
+ * in mobile/utils/storyProgress.ts. Render discipline: Firestore snapshot
+ * events are the ONLY setState source; the 500ms smoothing tick writes
+ * only a Reanimated shared value (no React re-render per tick). The bar
+ * is monotonic via maxFractionRef + clampMonotonic — it holds its max
+ * across Resume attempts (the worker rewinds phases; the bar doesn't).
+ * Reduced motion: no tick loop, no bounce, no withTiming — the bar steps
+ * on real snapshot milestones only.
  */
 import { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Pressable } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
+import Animated, {
+  FadeIn,
+  FadeOut,
+  Easing,
+  cancelAnimation,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withDelay,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 import { useTheme } from '../../../contexts/ThemeContext';
 import { GradientBackground } from '../../../components/GradientBackground';
 import { AnimatedPressable } from '../../../components/AnimatedPressable';
-import { subscribeToStory, StorySubscriptionResult } from '../../../services/stories';
+import { subscribeToStory, StorySnapshot, StorySubscriptionResult } from '../../../services/stories';
 import { resumeStory, FailureCode } from '../../../services/api';
+import { computeStoryProgress, clampMonotonic, getExpectedPages } from '../../../utils/storyProgress';
 
 const FAILURE_COPY: Record<FailureCode, string> = {
   generation_error: 'Something went wrong while creating the story.',
@@ -62,10 +84,46 @@ export default function GeneratingScreen() {
   // increments it on every claim) lets a new run re-enable the nav.
   const navigatedForAttemptRef = useRef<number | null>(null);
 
+  // FC-036 — progress-model state. All refs + shared values; React state
+  // stays snapshot-driven only (see module docstring).
+  const reducedMotion = useReducedMotion();
+  const latestSnapshotRef = useRef<StorySnapshot | null>(null);
+  // When the current milestone started (drives the asymptotic creep).
+  const phaseStartedAtRef = useRef<number>(Date.now());
+  const milestoneKeyRef = useRef<string>('');
+  // Monotonic display clamp — never let the bar move backward, including
+  // across Resume attempts where the raw fraction legitimately drops.
+  const maxFractionRef = useRef(0);
+  const progressSV = useSharedValue(0);
+  const bounceStar = useSharedValue(0);
+  const bounceSparkles = useSharedValue(0);
+  const bounceBook = useSharedValue(0);
+
+  const inProgress =
+    !!result && !('error' in result) &&
+    (result.status === 'queued' || result.status === 'generating');
+
   useEffect(() => {
     if (!id) return;
     navigatedForAttemptRef.current = null;
+    // FC-036: fresh story → reset the progress model.
+    latestSnapshotRef.current = null;
+    milestoneKeyRef.current = '';
+    phaseStartedAtRef.current = Date.now();
+    maxFractionRef.current = 0;
+    progressSV.value = 0;
     const unsub = subscribeToStory(id, (next) => {
+      // FC-036: keep the latest snapshot for the smoothing tick and reset
+      // the in-phase timer whenever a real milestone lands (milestoneKey
+      // includes `attempt`, so a Resume also resets the creep timer).
+      if (!('error' in next)) {
+        latestSnapshotRef.current = next;
+        const { milestoneKey } = computeStoryProgress(next, getExpectedPages(next.length), 0);
+        if (milestoneKey !== milestoneKeyRef.current) {
+          milestoneKeyRef.current = milestoneKey;
+          phaseStartedAtRef.current = Date.now();
+        }
+      }
       setResult(next);
       if ('error' in next || next.status !== 'complete') return;
       // Use the doc's current attempt (or 0 if absent — legacy stories)
@@ -76,7 +134,87 @@ export default function GeneratingScreen() {
       router.replace(`/story/${id}/read`);
     });
     return unsub;
-  }, [id, router]);
+  }, [id, router, progressSV]);
+
+  // FC-036: snapshot-driven bar update. In reduced-motion mode this is the
+  // ONLY thing that moves the bar (stepped, real milestones only, no
+  // withTiming); with motion it makes real milestone jumps land promptly
+  // between smoothing ticks.
+  useEffect(() => {
+    if (!result || 'error' in result) return;
+    if (result.status !== 'queued' && result.status !== 'generating') return;
+    const { fraction } = computeStoryProgress(
+      result,
+      getExpectedPages(result.length),
+      Date.now() - phaseStartedAtRef.current,
+    );
+    const clamped = clampMonotonic(maxFractionRef.current, fraction);
+    maxFractionRef.current = clamped;
+    if (reducedMotion) {
+      progressSV.value = clamped;
+    } else {
+      progressSV.value = withTiming(clamped, { duration: 400 });
+    }
+  }, [result, reducedMotion, progressSV]);
+
+  // FC-036: 500ms smoothing tick — writes ONLY the shared value (no
+  // setState → no re-render storm). Cleared on unmount and whenever we
+  // leave the in-progress branch; disabled entirely under reduced motion.
+  useEffect(() => {
+    if (!inProgress || reducedMotion) return;
+    const timer = setInterval(() => {
+      const snap = latestSnapshotRef.current;
+      if (!snap) return;
+      const { fraction } = computeStoryProgress(
+        snap,
+        getExpectedPages(snap.length),
+        Date.now() - phaseStartedAtRef.current,
+      );
+      const clamped = clampMonotonic(maxFractionRef.current, fraction);
+      maxFractionRef.current = clamped;
+      progressSV.value = withTiming(clamped, { duration: 400 });
+    }, 500);
+    return () => clearInterval(timer);
+  }, [inProgress, reducedMotion, progressSV]);
+
+  // FC-036: gentle staggered bounce for the icon trio. Reanimated-only;
+  // skipped entirely under reduced motion.
+  useEffect(() => {
+    if (!inProgress || reducedMotion) return;
+    const trio = [bounceStar, bounceSparkles, bounceBook];
+    trio.forEach((sv, i) => {
+      sv.value = withDelay(
+        i * 180,
+        withRepeat(
+          withSequence(
+            withTiming(-7, { duration: 550, easing: Easing.inOut(Easing.quad) }),
+            withTiming(0, { duration: 550, easing: Easing.inOut(Easing.quad) }),
+          ),
+          -1,
+          false,
+        ),
+      );
+    });
+    return () => {
+      trio.forEach((sv) => {
+        cancelAnimation(sv);
+        sv.value = 0;
+      });
+    };
+  }, [inProgress, reducedMotion, bounceStar, bounceSparkles, bounceBook]);
+
+  const fillStyle = useAnimatedStyle(() => ({
+    width: `${Math.min(Math.max(progressSV.value, 0), 1) * 100}%`,
+  }));
+  const bounceStarStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: bounceStar.value }],
+  }));
+  const bounceSparklesStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: bounceSparkles.value }],
+  }));
+  const bounceBookStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: bounceBook.value }],
+  }));
 
   const onResume = async () => {
     if (!id || isResuming) return;
@@ -196,23 +334,44 @@ export default function GeneratingScreen() {
     );
   }
 
-  // status === 'queued' or 'generating': live progress.
-  const message = result.progress?.message ?? 'Starting…';
-  const completed = result.progress?.completedSteps ?? 0;
-  const total = result.progress?.totalSteps ?? 0;
-  const showFraction = total > 0;
+  // status === 'queued' or 'generating': FC-036 determinate progress.
+  // Label is derived per render — snapshot events are the only renders,
+  // so captions update exactly on real milestones. (elapsed=0 is fine:
+  // the label never depends on elapsed time, only on real signals.)
+  const { label } = computeStoryProgress(result, getExpectedPages(result.length), 0);
 
   return (
     <GradientBackground colors={[palette.colors.background, palette.colors.secondary]}>
       <View style={styles.center}>
         <Animated.View entering={FadeIn} exiting={FadeOut} style={[styles.card, { backgroundColor: palette.colors.cardBg }]}>
-          <ActivityIndicator size="large" color={palette.colors.accent} />
-          <Text style={[styles.title, { color: palette.colors.textDark }]}>{message}</Text>
-          {showFraction && (
-            <Text style={[styles.fraction, { color: palette.colors.textMuted }]}>
-              {completed} of {total}
-            </Text>
+          <View style={styles.iconRow}>
+            <Animated.View style={reducedMotion ? undefined : bounceStarStyle}>
+              <Ionicons name="star" size={26} color={palette.colors.accent} />
+            </Animated.View>
+            <Animated.View style={reducedMotion ? undefined : bounceSparklesStyle}>
+              <Ionicons name="sparkles" size={26} color={palette.colors.accent} />
+            </Animated.View>
+            <Animated.View style={reducedMotion ? undefined : bounceBookStyle}>
+              <Ionicons name="book" size={26} color={palette.colors.accent} />
+            </Animated.View>
+          </View>
+          {reducedMotion ? (
+            <Text style={[styles.title, { color: palette.colors.textDark }]}>{label}</Text>
+          ) : (
+            <Animated.Text
+              key={label}
+              entering={FadeIn.duration(250)}
+              exiting={FadeOut.duration(200)}
+              style={[styles.title, { color: palette.colors.textDark }]}
+            >
+              {label}
+            </Animated.Text>
           )}
+          <View style={styles.progressTrack}>
+            <Animated.View
+              style={[styles.progressFill, { backgroundColor: palette.colors.accent }, fillStyle]}
+            />
+          </View>
           <Text style={[styles.hint, { color: palette.colors.textMuted }]}>
             This usually takes 2–5 minutes. Feel free to come back later — we’ll have it ready in your library.
           </Text>
@@ -246,9 +405,22 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 8,
   },
-  fraction: {
-    fontSize: 14,
-    fontWeight: '500',
+  iconRow: {
+    flexDirection: 'row',
+    gap: 18,
+    marginBottom: 2,
+  },
+  progressTrack: {
+    width: '100%',
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(45, 55, 72, 0.10)', // dark charcoal @ 10%
+    overflow: 'hidden',
+    marginTop: 4,
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 999,
   },
   hint: {
     fontSize: 13,
