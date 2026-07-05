@@ -22,6 +22,7 @@ Copy `_template.md` in this directory to start a new plan.
 
 ## Index
 
-_List active plans here as they are added._
+_Active (not-yet-Done) plans. Completed plans are indexed in the "Completed" section of [../FUTURE_CONSIDERATIONS.md](../FUTURE_CONSIDERATIONS.md), each entry linking its plan file._
 
-- [fc-001.md](fc-001.md) — FC-001: Frontend redesign (Figma v2), status: Plan published
+- [fc-016.md](fc-016.md) — FC-016: Story generation latency reduction, status: Executing (Phase 1 merged; Phases 2–4 pending)
+- [fc-040.md](fc-040.md) — FC-040: Reader page-turn polish (tap-to-turn animated curl), status: Plan published

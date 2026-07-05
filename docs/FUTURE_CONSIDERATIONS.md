@@ -369,6 +369,21 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
+### FC-040: Reader page-turn polish — tap-to-turn animated curl + control deconfliction + reachable exit button
+
+**Status:** Plan published
+**Size estimate:** M
+**Owner:** Zeshan
+**Plan file:** [docs/plans/fc-040.md](plans/fc-040.md)
+
+**Problem / opportunity:** The page-curl reader is clunky in beta (build 13): a turn needs a tracked ≥25%-width drag (slow), the screen randomly flashes on animation transitions (suspected commit-ordering race between UI-thread curl values and the JS page-state swap in `Curl.tsx`), the grey bars pop up uninvited on every page turn (`handlePageChange` force-shows them), and the ✕ exit button sits in the top-left with no safe-area insets — nearly off-screen in landscape on notched devices.
+
+**Direction:** replace the tracked swipe with **tap-to-turn**: edge taps (left 20% back / right 80%+ forward) fire a self-running ~500ms curl animation; the center 60% keeps FC-035's toggle-bars behavior (deconfliction via zones + reversible animated turns). Fix the flash with an explicit settle-gate at commit; stop auto-showing bars on turns; move ✕ to a safe-area-aware top-right with a 44pt target. Two files: `Curl.tsx`, `read.tsx`.
+
+**Relates to:** FC-035 (removed tap-to-navigate; this reintroduces it deliberately), FC-026 (contain/backdrop rendering must not regress), FC-024 (still no mobile test runner — manual verification contract).
+
+---
+
 ## Completed
 
 ### FC-029: Social sign-in — Google + Apple — Done 2026-06-24 (iOS; Android deferred)
