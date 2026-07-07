@@ -371,7 +371,7 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-040: Reader page-turn polish — tap-to-turn animated curl + control deconfliction + reachable exit button
 
-**Status:** Plan published
+**Status:** Executing — branch `feature/fc-040-reader-tap-turn`
 **Size estimate:** M
 **Owner:** Zeshan
 **Plan file:** [docs/plans/fc-040.md](plans/fc-040.md)
