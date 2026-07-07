@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold, SafetySetting } from '@google/genai';
 import { Storage } from '@google-cloud/storage';
 import { v4 as uuid } from 'uuid';
 import {
@@ -89,6 +89,22 @@ async function scoreBakedText(imageBase64: string, intendedText: string): Promis
 const TEXT_MODEL = 'gemini-3-flash-preview';
 const IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
 
+// FC-037 layer 2: explicit, strict safety settings on EVERY Gemini call —
+// never rely on model defaults for a children's product. Applied to all five
+// generateContent sites (story text, page, char ref, cast ref, title page)
+// plus the moderation classifier call.
+//
+// CIVIC_INTEGRITY deliberately omitted — irrelevant to kids' stories, and
+// adds false-positive surface. Pre-approved fallback if DANGEROUS_CONTENT
+// over-blocks legitimate mild-peril stories (courage/bravery): relax ONLY
+// that category to BLOCK_MEDIUM_AND_ABOVE (plan fc-037 Risks).
+const SAFETY_SETTINGS: SafetySetting[] = [
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE },
+];
+
 // Retry configuration for handling transient 5xx errors
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY_MS = 2000; // 2 seconds
@@ -136,7 +152,7 @@ export async function generateStory(input: StoryInput, storyId: string = 'unknow
     totalAttempts = attempt;
     try {
       response = await instrumentedGenerateContent(storyId, 'story_text', attempt, () =>
-        ai.models.generateContent({ model: TEXT_MODEL, contents: prompt }),
+        ai.models.generateContent({ model: TEXT_MODEL, contents: prompt, config: { safetySettings: SAFETY_SETTINGS } }),
       );
       break;
     } catch (error) {
@@ -159,6 +175,14 @@ export async function generateStory(input: StoryInput, storyId: string = 'unknow
   const elapsed = Date.now() - startTime;
   console.log(`${storyTag(storyId)} Story generated in ${elapsed}ms`);
   emitStageEvent({ storyId, stage: 'story_text', latencyMs: elapsed, attempts: totalAttempts, outcome: 'success' });
+
+  // FC-037: a prompt-level safety block comes back as empty candidates with
+  // promptFeedback.blockReason. Surface it with safety language so
+  // sanitizeFailureReason maps it to 'safety_blocked' (not generation_error).
+  const storyBlockReason = response.promptFeedback?.blockReason;
+  if (!response.text && storyBlockReason) {
+    throw new Error(`Story text generation safety blocked: ${storyBlockReason}`);
+  }
 
   // Extract text from response
   let text = response.text || '';
@@ -410,7 +434,7 @@ export async function generateIllustration(
           ai.models.generateContent({
             model: IMAGE_MODEL,
             contents,
-            config: { responseModalities: ['IMAGE'] },
+            config: { responseModalities: ['IMAGE'], safetySettings: SAFETY_SETTINGS },
           }),
         );
         console.log(`${tag} generated in ${Date.now() - startTime}ms (attempt ${attempt})`);
@@ -424,7 +448,12 @@ export async function generateIllustration(
             break;
           }
         }
-        if (!imageData) throw new Error(`No image data in ${IMAGE_MODEL} response`);
+        if (!imageData) {
+          // FC-037: include the safety blockReason (when present) so any
+          // propagation of this error maps to 'safety_blocked'.
+          const blockReason = response.promptFeedback?.blockReason;
+          throw new Error(`No image data in ${IMAGE_MODEL} response${blockReason ? ` — safety blocked: ${blockReason}` : ''}`);
+        }
         return { imageData, mimeType };
       } catch (error) {
         lastError = error;
@@ -506,14 +535,21 @@ export async function generateCharacterReference(
   character: CharacterVisualSheet,
   storyId: string,
   style: ArtStyle = 'watercolor',
+  charIndex: number = 0,
 ): Promise<CharacterReferenceResult> {
   const promptText = buildCharacterReferencePrompt(character.name, character.description, style);
   const contents: Array<{ text: string }> = [{ text: promptText }];
 
+  // FC-037 PII: character names include the child's real name (the story
+  // prompt forces the child to be characterSheets[0]) — logs and stage
+  // events use `char #<idx>` instead. Names stay in prompts, Firestore
+  // user-owned docs, and progressMessage (user-facing) only.
+  const charTag = `char #${charIndex}`;
+
   // FC-013 review fix H3: log payload size for parity with page-gen logs.
   const payloadBytes = JSON.stringify(contents).length;
   console.log(
-    `Generating character reference for "${character.name}" with ${IMAGE_MODEL} [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
+    `Generating character reference for ${charTag} with ${IMAGE_MODEL} [payload ~${Math.round(payloadBytes / 1024)}KB]...`,
   );
   const startTime = Date.now();
   const safeNameSlug = character.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'character';
@@ -527,12 +563,12 @@ export async function generateCharacterReference(
         ai.models.generateContent({
           model: IMAGE_MODEL,
           contents,
-          config: { responseModalities: ['IMAGE'] },
+          config: { responseModalities: ['IMAGE'], safetySettings: SAFETY_SETTINGS },
         }),
       );
 
       const elapsed = Date.now() - startTime;
-      console.log(`Character reference "${character.name}" generated in ${elapsed}ms (attempt ${attempt})`);
+      console.log(`Character reference ${charTag} generated in ${elapsed}ms (attempt ${attempt})`);
 
       const parts = response.candidates?.[0]?.content?.parts || [];
       let imageData: string | null = null;
@@ -545,7 +581,8 @@ export async function generateCharacterReference(
         }
       }
       if (!imageData) {
-        throw new Error('No image data in character reference response');
+        const blockReason = response.promptFeedback?.blockReason;
+        throw new Error(`No image data in character reference response${blockReason ? ` — safety blocked: ${blockReason}` : ''}`);
       }
 
       const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
@@ -554,31 +591,34 @@ export async function generateCharacterReference(
       emitStageEvent({
         storyId, stage: 'char_ref', latencyMs: elapsed,
         attempts: totalAttempts, outcome: 'success',
-        detail: { name: character.name },
+        detail: { charIndex, nameLength: character.name.length },
       });
       return { name: character.name, publicUrl, imageBase64: imageData, mimeType };
     } catch (error) {
       lastError = error;
       if (isRetryableError(error) && attempt < MAX_RETRIES) {
         const delayMs = jitteredBackoffMs(attempt);
-        console.log(`Character ref "${character.name}": 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
+        console.log(`Character ref ${charTag}: 503 error, retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
         await sleep(delayMs);
         continue;
       }
-      console.error(`Failed to generate character reference for "${character.name}" after ${attempt} attempts:`, error);
+      console.error(`Failed to generate character reference for ${charTag} after ${attempt} attempts:`, error);
       break;
     }
   }
 
-  console.error(`All ${MAX_RETRIES} attempts failed for character reference "${character.name}"; last error:`, lastError);
+  console.error(`All ${MAX_RETRIES} attempts failed for character reference ${charTag}; last error:`, lastError);
   emitStageEvent({
     storyId, stage: 'char_ref', latencyMs: Date.now() - startTime,
     attempts: totalAttempts, outcome: 'failure',
-    detail: { name: character.name },
+    detail: { charIndex, nameLength: character.name.length },
   });
   return {
     name: character.name,
-    publicUrl: `https://placehold.co/800x600/png?text=${encodeURIComponent(character.name)}`,
+    // FC-037 PII: static text — the previous ?text=<name> embedded the
+    // child's name in an external placehold.co request. (URL is filtered
+    // out before persistence anyway; this closes the external-request leak.)
+    publicUrl: 'https://placehold.co/800x600/png?text=Character',
     imageBase64: null,
     mimeType: 'image/png',
   };
@@ -599,7 +639,8 @@ export async function generateCastReference(
 ): Promise<CharacterReferenceResult> {
   const promptText = buildCastReferencePrompt(characters, style);
   const contents: Array<{ text: string }> = [{ text: promptText }];
-  console.log(`Generating CAST reference (${characters.length} chars: ${characters.map((c) => c.name).join(', ')}) with ${IMAGE_MODEL}...`);
+  // FC-037 PII: log the count only — character names include the child's name.
+  console.log(`Generating CAST reference (${characters.length} chars) with ${IMAGE_MODEL}...`);
   const startTime = Date.now();
 
   let lastError: unknown = null;
@@ -611,7 +652,7 @@ export async function generateCastReference(
         ai.models.generateContent({
           model: IMAGE_MODEL,
           contents,
-          config: { responseModalities: ['IMAGE'] },
+          config: { responseModalities: ['IMAGE'], safetySettings: SAFETY_SETTINGS },
         }),
       );
       const elapsed = Date.now() - startTime;
@@ -627,7 +668,8 @@ export async function generateCastReference(
         }
       }
       if (!imageData) {
-        throw new Error('No image data in cast reference response');
+        const blockReason = response.promptFeedback?.blockReason;
+        throw new Error(`No image data in cast reference response${blockReason ? ` — safety blocked: ${blockReason}` : ''}`);
       }
       const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
       const filename = `stories/${storyId}/character-refs/cast-${uuid()}.${extension}`;
@@ -696,7 +738,7 @@ export async function generateTitlePage(
         ai.models.generateContent({
           model: IMAGE_MODEL,
           contents,
-          config: { responseModalities: ['IMAGE'] },
+          config: { responseModalities: ['IMAGE'], safetySettings: SAFETY_SETTINGS },
         }),
       );
 
@@ -714,7 +756,8 @@ export async function generateTitlePage(
         }
       }
       if (!imageData) {
-        throw new Error('No image data in title page response');
+        const blockReason = response.promptFeedback?.blockReason;
+        throw new Error(`No image data in title page response${blockReason ? ` — safety blocked: ${blockReason}` : ''}`);
       }
 
       const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
@@ -833,7 +876,7 @@ export async function generateAllIllustrations(
   if (orderedSheets.length > sheetsForRefs.length) {
     console.warn(
       `Story has ${orderedSheets.length} characters; capping reference images at ${MAX_CHARACTER_REFS} ` +
-      `(${orderedSheets.slice(MAX_CHARACTER_REFS).map((c) => c.name).join(', ')} get textual sheets only).`,
+      `(${orderedSheets.length - MAX_CHARACTER_REFS} character(s) get textual sheets only).`,
     );
   }
 
@@ -849,32 +892,33 @@ export async function generateAllIllustrations(
 
     if (alreadyDone.length > 0) {
       console.log(
-        `${storyTag(storyId)} Step 2a (FC-013/FC-017 resume): re-downloading ${alreadyDone.length} prior char ref(s) from GCS: ${alreadyDone.map((c) => c.name).join(', ')}`,
+        `${storyTag(storyId)} Step 2a (FC-013/FC-017 resume): re-downloading ${alreadyDone.length} prior char ref(s) from GCS`,
       );
       const downloaded = await Promise.all(alreadyDone.map(async (c) => {
         const url = state.characterReferenceUrls[c.name];
         const bytes = await downloadRef(url);
         return { name: c.name, bytes };
       }));
-      for (const r of downloaded) {
+      downloaded.forEach((r, i) => {
         if (r.bytes) {
           characterRefImages.push({ type: 'character', name: r.name, data: r.bytes.data, mimeType: r.bytes.mimeType });
         } else {
           // GCS download failed for a previously-persisted ref. Don't regenerate
           // — that would burn cost on a transient error. Page generation will
           // proceed without this ref's visual (text description still applies).
-          console.warn(`Character ref "${r.name}" rehydrate failed — proceeding without its visual.`);
+          console.warn(`Character ref char #${i} rehydrate failed — proceeding without its visual.`);
         }
-      }
+      });
     }
 
     if (todo.length > 0) {
+      // FC-037 PII: log the count only — character names include the child's name.
       console.log(
-        `${storyTag(storyId)} Step 2a (FC-013): generating ${todo.length} character reference image(s) in parallel: ${todo.map((c) => c.name).join(', ')}...`,
+        `${storyTag(storyId)} Step 2a (FC-013): generating ${todo.length} character reference image(s) in parallel...`,
       );
       const charRefStart = Date.now();
       const refResults = await Promise.all(
-        todo.map((c) => generateCharacterReference(c, storyId, style)),
+        todo.map((c, i) => generateCharacterReference(c, storyId, style, i)),
       );
       const successCount = refResults.filter((r) => r.imageBase64).length;
       emitStageEvent({
@@ -884,7 +928,7 @@ export async function generateAllIllustrations(
         detail: { successCount, totalCount: todo.length, alreadyDoneCount: alreadyDone.length },
       });
       let doneCount = alreadyDone.length;
-      for (const result of refResults) {
+      for (const [resultIndex, result] of refResults.entries()) {
         // FC-013 review fix H2: only persist + return refs that actually produced
         // image data. Failed refs degrade gracefully — page generations skip their
         // visual ref, characterSheets[] text description still applies, and we
@@ -906,8 +950,9 @@ export async function generateAllIllustrations(
           await writer.saveProgress('char-refs', doneCount, sheetsForRefs.length,
             progressMessage('char-refs', doneCount, sheetsForRefs.length, { charName: result.name }));
         } else {
+          // FC-037 PII: log the char index, not the name.
           console.warn(
-            `Character reference for "${result.name}" failed to produce image data — omitting from characterReferenceUrls; page generations will skip its visual ref (text description still applies).`,
+            `Character reference for char #${resultIndex} failed to produce image data — omitting from characterReferenceUrls; page generations will skip its visual ref (text description still applies).`,
           );
         }
       }
@@ -1125,4 +1170,22 @@ export async function generateAllIllustrations(
   });
 
   return { pageUrls, characterReferenceUrls, titlePageImageUrl, castReferenceUrl };
+}
+
+/**
+ * FC-037 layer 3: thin production wrapper the moderation gate injects as its
+ * `generate` fn. One TEXT_MODEL call with explicit SAFETY_SETTINGS, no retry
+ * (fail-closed is the moderation module's job — any error/timeout there
+ * blocks), instrumented as a 'moderation' call. Returns the raw model text;
+ * the caller (moderation.ts) owns parsing + verdict logic.
+ */
+export async function generateModerationText(prompt: string, storyId: string = 'unknown'): Promise<string> {
+  const response = await instrumentedGenerateContent(storyId, 'moderation', 1, () =>
+    ai.models.generateContent({
+      model: TEXT_MODEL,
+      contents: prompt,
+      config: { safetySettings: SAFETY_SETTINGS },
+    }),
+  );
+  return response.text || '';
 }
