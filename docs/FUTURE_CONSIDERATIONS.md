@@ -307,7 +307,7 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-037: Content safety guards (kid-safe input + generation)
 
-**Status:** Plan published
+**Status:** Executing — PR open (input validation + explicit safetySettings + output moderation gate + PII log redaction + mobile UX mirror). Image *vision* moderation deferred to FC-041.
 **Size estimate:** M–L
 **Owner:** Zeshan
 **Plan file:** [docs/plans/fc-037.md](plans/fc-037.md)
@@ -381,6 +381,21 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 **Direction:** replace the tracked swipe with **tap-to-turn**: edge taps (left 20% back / right 80%+ forward) fire a self-running ~500ms curl animation; the center 60% keeps FC-035's toggle-bars behavior (deconfliction via zones + reversible animated turns). Fix the flash with an explicit settle-gate at commit; stop auto-showing bars on turns; move ✕ to a safe-area-aware top-right with a 44pt target. Two files: `Curl.tsx`, `read.tsx`.
 
 **Relates to:** FC-035 (removed tap-to-navigate; this reintroduces it deliberately), FC-026 (contain/backdrop rendering must not regress), FC-024 (still no mobile test runner — manual verification contract).
+
+---
+
+### FC-041: Vision moderation pass on generated pages
+
+**Status:** Consideration
+**Size estimate:** M
+**Owner:** Zeshan
+**Filed by:** FC-037 (explicit non-goal — deferred follow-up)
+
+**Problem / opportunity:** FC-037 added a *text* moderation gate over the generated story text (title + pages + titlePage), plus explicit `safetySettings` on every Gemini call. But there is still **no vision/OCR check on the generated illustrations themselves** before they're persisted and shown to a child. Nano-Banana bakes text INTO the image and renders characters/scenes; a prompt that passes text moderation could still yield an image with unsafe visual content or unsafe baked-in text that the text gate never saw (the illustration prompt derives from `sceneDescription` + style, not just page text). Model `safetySettings` are the only image-side guard today, and whether the image endpoint even honors them at runtime is unverified (FC-037 Risks).
+
+**Idea:** after page images are generated (and after the existing OCR text-verify pass), run a vision-moderation check — either (a) a multimodal classifier call over each generated page image ("is this appropriate for ages 3-8?"), or (b) reuse the OCR-extracted text through the FC-037 text classifier as a cheaper first pass. Fail-closed and route violations through the existing `safety_blocked` path, mirroring FC-037's output gate. Cost/latency tradeoff (one classifier call per page) needs measuring — the text gate is one call per story; a per-page vision gate is N calls.
+
+**Relates to:** FC-037 (text moderation gate + safetySettings — this is the deferred image half), FC-020 (baked-in text + OCR text-verify pipeline — OCR output could feed a cheaper vision-moderation first pass), FC-016 (latency — per-page vision calls add cost/latency to measure).
 
 ---
 
