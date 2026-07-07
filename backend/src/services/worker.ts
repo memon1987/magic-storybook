@@ -49,7 +49,8 @@ import {
   ArtStyle,
   FailureCode,
 } from '../types';
-import { generateStory, generateAllIllustrations, AllIllustrationsResult } from './gemini';
+import { generateStory, generateAllIllustrations, generateModerationText, AllIllustrationsResult } from './gemini';
+import { moderateStoryText } from './moderation';
 import { JobState, JobStateWriter, progressMessage } from './jobState';
 import { emitStageEvent, storyTag } from './instrumentation';
 
@@ -361,6 +362,13 @@ async function runStoryWorkerImpl(storyId: string): Promise<RunStoryWorkerResult
     } else {
       await writer.saveProgress('story-text', 0, 1, progressMessage('story-text', 0, 1));
       story = await generateStory(input, storyId);
+      // FC-037 layer 3: fail-closed output moderation gate. Runs BEFORE
+      // saveStoryText, so any persisted storyText has passed the gate and the
+      // resume path (which skips this phase when state.storyText is present)
+      // never needs to re-moderate. A block throws a ModerationBlockedError
+      // whose message contains "safety blocked" → sanitizeFailureReason maps
+      // it to FailureCode 'safety_blocked' (reuses the mobile safety UX).
+      await moderateStoryText(story, (prompt) => generateModerationText(prompt, storyId), { storyId });
       await writer.saveStoryText(story);
       await writer.saveProgress('story-text', 1, 1, progressMessage('story-text', 1, 1));
     }
