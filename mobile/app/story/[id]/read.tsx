@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import ConfettiCannon from 'react-native-confetti-cannon';
@@ -34,6 +35,7 @@ export default function ReadScreen() {
   const router = useRouter();
   const { palette } = useTheme();
   const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
 
   const [currentPage, setCurrentPage] = useState(0);
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -130,9 +132,12 @@ export default function ReadScreen() {
   // the curl swipe (forward + backward); the dots row jumps to any page.
   const handleTap = () => setControlsVisible((v) => !v);
 
+  // FC-040: turning a page must NOT summon the bars. If they're already visible,
+  // the auto-hide timer resets naturally (the effect keyed on currentPage), so a
+  // turn while bars are up keeps them up a bit longer rather than re-showing them
+  // uninvited after every turn.
   const handlePageChange = (newPage: number) => {
     setCurrentPage(newPage);
-    setControlsVisible(true);
   };
 
   if (isLoading || !id) {
@@ -189,16 +194,28 @@ export default function ReadScreen() {
         <Animated.View
           entering={FadeIn.duration(200)}
           exiting={FadeOut.duration(200)}
-          style={styles.topBar}
+          style={[
+            styles.topBar,
+            {
+              // FC-040: respect the safe area so the ✕ never lands inside the
+              // notch / Dynamic Island / rounded-corner region in landscape.
+              paddingTop: Math.max(12, insets.top),
+              paddingLeft: Math.max(12, insets.left),
+              paddingRight: Math.max(12, insets.right),
+            },
+          ]}
           pointerEvents="box-none"
         >
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.closeIconButton}>
-            <Ionicons name="close" size={26} color="#FFFFFF" />
-          </Pressable>
+          {/* Empty spacer mirrors the ✕ button so the title stays centered. */}
+          <View style={styles.closeIconButton} />
           <Text style={styles.headerTitle} numberOfLines={1}>
             {story.title}
           </Text>
-          <View style={styles.closeIconButton} />
+          {/* FC-040: ✕ moved to top-right (modal-close convention) with a 44×44
+              target + generous hitSlop for reliable tapping. */}
+          <Pressable onPress={() => router.back()} hitSlop={16} style={styles.closeIconButton}>
+            <Ionicons name="close" size={26} color="#FFFFFF" />
+          </Pressable>
         </Animated.View>
       )}
 
@@ -310,14 +327,14 @@ const styles = StyleSheet.create({
     right: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingTop: 12,
+    // paddingTop / paddingLeft / paddingRight are applied inline from safe-area
+    // insets (FC-040); only the bottom padding is fixed here.
     paddingBottom: 12,
     backgroundColor: 'rgba(0,0,0,0.55)',
   },
   closeIconButton: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
