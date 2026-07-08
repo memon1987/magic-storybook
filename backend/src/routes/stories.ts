@@ -216,6 +216,21 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
     return;
   }
 
+  // FC-037 review LOW-7: validate childGender against its enum. It's an
+  // optional field, but an unknown value would otherwise reach Firestore
+  // (and the prompt via validateStoryInput) unchecked. Absent/null is fine
+  // (the field is optional); only a present, out-of-enum value is rejected.
+  if (
+    req.body.childGender !== undefined &&
+    req.body.childGender !== null &&
+    !['boy', 'girl'].includes(req.body.childGender)
+  ) {
+    res.status(400).json({
+      error: 'Invalid childGender. Must be: boy or girl',
+    });
+    return;
+  }
+
   // FC-037 layer 1: kid-safe input validation. Runs AFTER enum/presence
   // checks and BEFORE any story doc is created, so rejected free-text input
   // never reaches a Gemini prompt, Firestore, or the worker. First failure
