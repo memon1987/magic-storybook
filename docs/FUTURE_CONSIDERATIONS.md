@@ -218,23 +218,6 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
-### FC-024: Stand up a mobile test runner (vitest / jest-expo)
-
-**Status:** Executing (PR #43)
-**Size estimate:** M
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-024.md](plans/fc-024.md)
-
-**Problem / opportunity:** The `mobile/` package has **zero** test infrastructure — no `test` script, no vitest/jest, no test files (verified 2026-06-22 during FC-022). Pure logic that's easy to get wrong currently ships verified only by manual walkthrough: e.g. FC-022's `readerPageLabel` page-counter helper (`components/PageCurl/paging.ts` — cover/end-page offset math), the `services/api.ts` auth-token interceptor, and `useAuth` state transitions. A runner would let us unit-test extracted pure helpers immediately and add component tests for the reader over time. (Backend already uses Vitest — see FC-020.)
-
-**Open questions:**
-- vitest (consistent with backend, fast) vs jest-expo (official Expo preset, better RN/Skia/Reanimated mocking out of the box)?
-- Unit-only to start, or also component tests via `@testing-library/react-native` given the Skia/Reanimated native deps that need mocking?
-- CI wiring: there is **no GitHub Actions workflow** in this repo yet (noted during FC-023). Stand one up to gate PRs on `tsc` + tests, or run locally only at first?
-- First targets once a runner exists: `readerPageLabel`, the `api.ts` interceptor, `useAuth` reducer logic.
-
----
-
 ### FC-027: Responsive layout Phase 2 — iPad / landscape polish
 
 **Status:** Plan published
@@ -283,66 +266,6 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
-### FC-036: Playful, progress-driven story loading screen
-
-**Status:** Executing — [PR #44](https://github.com/memon1987/ai-storybook-app/pull/44)
-**Size estimate:** M
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-036.md](plans/fc-036.md)
-
-**Problem / opportunity:** Story generation takes ~2–5 min, but [mobile/app/story/[id]/generating.tsx](../mobile/app/story/[id]/generating.tsx) currently shows just a spinner + a single `progress.message` string. For a kids' app, that wait should be *delightful* and should communicate real, honest progress. The FC-017 worker already streams rich step-by-step state into the Firestore doc that the screen subscribes to via `subscribeToStory` — character refs, cast lineup, title page, then pages 1..N landing in `pageUrls` incrementally, plus `attempt`/`status`/`progress.message`. That existing signal can drive a real progress bar instead of an indeterminate spinner.
-
-**Idea:** replace the spinner with a playful, animated progress experience — e.g. a determinate progress bar tied to actual completed steps (refs → cast → title → each page), with thematic micro-animations (characters/pages "appearing" as they generate, a peek of each illustration as its `pageUrls` entry lands, friendly copy that narrates what's happening: "Drawing {childName}…", "Painting page 3…"). Reanimated is already in the project (and Skia, if we want richer effects).
-
-**Open questions:**
-- Drive the bar from real Firestore signals (count of `pageUrls` vs expected page count + the pre-page steps) vs an estimated timer — or a blend (real milestones, time-smoothed between them)?
-- Show generated page thumbnails as they stream in, or keep it abstract/illustrative? (Thumbnails are honest + engaging but reveal the story before reading.)
-- How to weight the long char-ref stage (~the latency bottleneck per FC-016) so the bar doesn't stall early?
-- Reduced-motion / accessibility fallback.
-- Keep the existing failed/resume/retry-budget states (FC-031) intact — this is a redesign of the *in-progress* state only.
-
-**Depends on / relates to:** FC-017 (the live-progress data contract this builds on), FC-016 (char-ref latency — informs progress weighting).
-
----
-
-### FC-037: Content safety guards (kid-safe input + generation)
-
-**Status:** Executing — PR open (input validation + explicit safetySettings + output moderation gate + PII log redaction + mobile UX mirror). Image *vision* moderation deferred to FC-041.
-**Size estimate:** M–L
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-037.md](plans/fc-037.md)
-
-**Problem / opportunity:** The audience is **children**; the users entering input are parents. Free-text fields — `childName` and `favoriteAnimal` in [mobile/app/(tabs)/create.tsx](../mobile/app/(tabs)/create.tsx) — flow directly into the Gemini text + image prompts. Today the **only** safety mechanism is reactive: [worker.ts](../backend/src/services/worker.ts) maps Gemini's own "safety/blocked/policy" errors to the `safety_blocked` failure code. There are **no explicit Gemini `safetySettings`** on the generate calls (config is just `responseModalities`/temperature), **no proactive input validation/blocklist**, and **no output moderation** before a story is persisted and shown to a child. A parent could enter inappropriate input (deliberately, or a typo/autocorrect) and get either an opaque failure or — worse — borderline content baked into a child-facing book.
-
-**Idea (layered defense):**
-- **Input layer:** validate/normalize the free-text fields on client + server — length caps, character allowlist, profanity/unsafe-term/PII blocklist — with friendly inline rejection *before* submit.
-- **Generation layer:** set explicit Gemini `safetySettings` (HarmCategory thresholds, erring strict) on **both** the story-text (`generateStory`) and image (`generateContent`) calls — don't rely on defaults.
-- **Output layer:** moderate the generated story text (and ideally a vision check on the images) before persisting; route violations through the existing `safety_blocked` path.
-- **UX:** keep the existing `safety_blocked` copy; add a clear "let's keep it kid-friendly" message on input rejection.
-
-**Open questions:**
-- Moderation mechanism for output (Gemini safety-rating metadata vs a dedicated moderation API vs a curated blocklist)?
-- Where to draw the strictness line + false-positive tolerance (it's a kids' app — err strict)?
-- PII: `childName` is a real child's name — review storage/logging scope.
-- COPPA / App Store Kids-category implications, since the audience is children.
-
----
-
-### FC-038: Library cover thumbnails clipped (contain, not cover)
-
-**Status:** Executing
-**Size estimate:** S
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-038.md](plans/fc-038.md)
-
-**Problem / opportunity:** On the library grid, story covers are visibly cut off. [mobile/components/StoryCard.tsx](../mobile/components/StoryCard.tsx) renders the cover with `contentFit="cover"` (line 41) inside a `coverWrap` pinned to `aspectRatio: 3/4` (line 114). `cover` **crops** the Gemini-generated title image to fill the 3:4 box, and since that image isn't 3:4, the crop slices off edges — the title text and characters. This is the **same clipping class FC-026 fixed in the reader** (which switched `fit="cover"` → `fit="contain"` + a blurred ambient backdrop so baked-in text is never cropped).
-
-**Idea:** mirror the FC-026 reader fix on the card — `contentFit="contain"` so the whole cover fits, with a fill (or a blurred backdrop of the same image) behind the letterbox so it still looks polished. Alternative: pin the box `aspectRatio` to the generated image's actual ratio. One file: `StoryCard.tsx` (plus an optional backdrop, as FC-026 did).
-
-**Relates to:** FC-026 (same contain-vs-cover clipping fix in the reader), FC-028 (pinning the backend image aspect ratio would shrink the letterbox bands).
-
----
-
 ### FC-039: iOS-style library edit mode (jiggle + delete badge)
 
 **Status:** Plan published
@@ -369,27 +292,13 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
-### FC-040: Reader page-turn polish — tap-to-turn animated curl + control deconfliction + reachable exit button
-
-**Status:** Executing — branch `feature/fc-040-reader-tap-turn`
-**Size estimate:** M
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-040.md](plans/fc-040.md)
-
-**Problem / opportunity:** The page-curl reader is clunky in beta (build 13): a turn needs a tracked ≥25%-width drag (slow), the screen randomly flashes on animation transitions (suspected commit-ordering race between UI-thread curl values and the JS page-state swap in `Curl.tsx`), the grey bars pop up uninvited on every page turn (`handlePageChange` force-shows them), and the ✕ exit button sits in the top-left with no safe-area insets — nearly off-screen in landscape on notched devices.
-
-**Direction:** replace the tracked swipe with **tap-to-turn**: edge taps (left 20% back / right 80%+ forward) fire a self-running ~500ms curl animation; the center 60% keeps FC-035's toggle-bars behavior (deconfliction via zones + reversible animated turns). Fix the flash with an explicit settle-gate at commit; stop auto-showing bars on turns; move ✕ to a safe-area-aware top-right with a 44pt target. Two files: `Curl.tsx`, `read.tsx`.
-
-**Relates to:** FC-035 (removed tap-to-navigate; this reintroduces it deliberately), FC-026 (contain/backdrop rendering must not regress), FC-024 (still no mobile test runner — manual verification contract).
-
----
-
 ### FC-041: Vision moderation pass on generated pages
 
-**Status:** Consideration
+**Status:** Plan published — [docs/plans/fc-041.md](plans/fc-041.md)
 **Size estimate:** M
 **Owner:** Zeshan
 **Filed by:** FC-037 (explicit non-goal — deferred follow-up)
+**Plan file:** [docs/plans/fc-041.md](plans/fc-041.md)
 
 **Problem / opportunity:** FC-037 added a *text* moderation gate over the generated story text (title + pages + titlePage), plus explicit `safetySettings` on every Gemini call. But there is still **no vision/OCR check on the generated illustrations themselves** before they're persisted and shown to a child. Nano-Banana bakes text INTO the image and renders characters/scenes; a prompt that passes text moderation could still yield an image with unsafe visual content or unsafe baked-in text that the text gate never saw (the illustration prompt derives from `sceneDescription` + style, not just page text). Model `safetySettings` are the only image-side guard today, and whether the image endpoint even honors them at runtime is unverified (FC-037 Risks).
 
@@ -400,6 +309,41 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 ---
 
 ## Completed
+
+### FC-040: Reader page-turn polish — tap-to-turn animated curl — Done 2026-07-07
+
+Replaced the tracked ≥25%-width swipe with tap-to-turn: edge taps fire a self-running ~500ms animated page-curl (forward and backward), the center 60% keeps FC-035's toggle-bars behavior, the flash is fixed with an explicit settle-gate at commit, bars no longer auto-show on turns, and the ✕ moved to a safe-area-aware top-right with a 44pt target. Two adversarial reviews both returned REQUEST_CHANGES, catching 2 HIGHs: the ✕ overlapped the forward-turn zone (RNGH `Tap` vs `Pressable` double-fire, re-opening the FC-035 overloaded-tap bug at the most important control) and the `isAnimating` shared-value guard was async-batched so a rapid double-tap could slip two turns through — fixed with a chrome-band tap exclusion + a synchronous JS-thread `busyRef` latch, plus settle-wedge and dot-jump guards → CONFIRMED-CLEAN. Mobile-only; reaches users on the next EAS build.
+
+- **Plan:** [docs/plans/fc-040.md](plans/fc-040.md)
+- **PR:** [#45](https://github.com/memon1987/ai-storybook-app/pull/45) (squash-merged as `17ada50`)
+
+### FC-038: Library cover thumbnails — contain + blurred backdrop — Done 2026-07-07
+
+Mirrored the FC-026 reader fix on the library card so baked-in title text is no longer clipped: `contentFit="contain"` foreground over a blurred backdrop of the same cover in `StoryCard.tsx`. Two adversarial reviews both returned REQUEST_CHANGES on the same HIGH — `blurRadius` is applied in source-pixel space, so on a ~1024px Gemini cover in a small card it rendered as a near-sharp ghost duplicate (doubled title text) rather than a frost. Fixed with `enforceEarlyResizing` (iOS) + `Platform.select({ ios: 20, android: 8 })` + `transition={150}`; final appearance depends on real source resolution (unpinned until FC-028), so an on-device iOS blur screenshot is an explicit pre-EAS-build gate. Mobile-only (no OTA; merge ≠ ship).
+
+- **Plan:** [docs/plans/fc-038.md](plans/fc-038.md)
+- **PR:** [#42](https://github.com/memon1987/ai-storybook-app/pull/42) (squash-merged as `17fe907`)
+
+### FC-037: Content safety guards (kid-safe input + generation) — Done 2026-07-07
+
+Layered content-safety defense: server-side input validation (length caps + Latin-script charset allowlist + `obscenity` profanity screen + a curated unsafe-term list) rejecting bad input before a story doc is created, explicit strict `safetySettings` on all five gemini `generateContent` call sites, a fail-closed text moderation gate between story-text generation and persistence (violations route through the existing `safety_blocked` path — no new `FailureCode`), and PII (child/character name) redaction from backend logs + telemetry. Two independent adversarial reviews both returned REQUEST_CHANGES, catching 2 HIGHs — homoglyph and whitespace/inflection filter bypasses, plus moderation prompt-injection and a chatty-JSON false-block — fixed with a `\p{Script=Latin}` + confusable-overlay charset, whitespace-collapse and `\b<stem>\w*` inflection matching, a delimiter-quarantined moderation prompt, and `extractFirstJsonObject`; 137/137 backend tests. Mobile UX mirror reaches users only on the next EAS build; backend deploy is owner-run. FC-041 is the deferred image-moderation half.
+
+- **Plan:** [docs/plans/fc-037.md](plans/fc-037.md)
+- **PR:** [#46](https://github.com/memon1987/ai-storybook-app/pull/46) (squash-merged as `2a1a115`)
+
+### FC-036: Playful, progress-driven story loading screen — Done 2026-07-07
+
+Replaced the `generating.tsx` spinner with a determinate, milestone-blended progress bar driven by real FC-017 Firestore signals (refs → cast → title → each page), with playful copy and micro-animations. Adversarial review caught a HIGH: under reduced-motion the bar froze for 3-5 minutes during the long char-ref stage — fixed so the tick advances in both motion modes, plus an `applyCreepFloor`/`nextBoundary` ceiling and a label-honesty gate so copy never claims more progress than the real signals support. Unit tests ship as a `.tsx` check pending the FC-024 rebase to jest. Mobile-only; reaches users on the next EAS build.
+
+- **Plan:** [docs/plans/fc-036.md](plans/fc-036.md)
+- **PR:** [#44](https://github.com/memon1987/ai-storybook-app/pull/44) (squash-merged as `f97aa77`)
+
+### FC-024: Mobile test runner (jest-expo) + GitHub Actions CI — Done 2026-07-07
+
+Stood up the first mobile test infrastructure — a jest-expo runner plus a GitHub Actions workflow gating PRs — closing the gap where `mobile/` had zero tests and pure logic shipped verified only by manual walkthrough. Adversarial review added varied-story-page-count tests to pin the reader-label denominator (16 → 20 tests); CI green on the PR. Unblocks unit tests for FC-036/FC-040's extracted pure helpers.
+
+- **Plan:** [docs/plans/fc-024.md](plans/fc-024.md)
+- **PR:** [#43](https://github.com/memon1987/ai-storybook-app/pull/43) (squash-merged as `4f5f870`)
 
 ### FC-029: Social sign-in — Google + Apple — Done 2026-06-24 (iOS; Android deferred)
 
