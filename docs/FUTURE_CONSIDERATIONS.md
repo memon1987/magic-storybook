@@ -231,12 +231,14 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-028: Pin backend image aspect ratio (optional)
 
-**Status:** Plan published
+**Status:** Executing (PR open) — Path B (prompt-level) taken
 **Size estimate:** S
 **Owner:** Zeshan
 **Plan file:** [docs/plans/fc-028.md](plans/fc-028.md)
 
 **Problem / opportunity:** With FC-026's reader `contain`, images letterbox by the gap between the generated ratio and the device ratio. Pinning `config.imageConfig.aspectRatio` (~16:9, verified against the installed `@google/genai` + `gemini-3.1-flash-image-preview` allowed ratios) on all four image calls in `backend/src/services/gemini.ts` would shrink those bands for **new** stories. Does not affect existing stories (baked images frozen) — the mobile `contain` change already covers those, which is why this is optional polish, not a fix.
+
+**SDK finding (execution, 2026-07-08):** installed `@google/genai` is **v0.7.0**; `GenerateContentConfig` (`dist/genai.d.ts:1104`) has **no `imageConfig`/`aspectRatio`** field — `aspectRatio` exists only on `GenerateImagesConfig`/`GenerateVideosConfig`, which this app does not use. A config-level pin fails `tsc`, so the plan's **Path B** (best-effort prompt-level 16:9 instruction, shared constant appended to all four prompt builders) was taken. Config-level pin arrives with the SDK-upgrade follow-up (FC-042).
 
 ---
 
@@ -305,6 +307,23 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 **Idea:** after page images are generated (and after the existing OCR text-verify pass), run a vision-moderation check — either (a) a multimodal classifier call over each generated page image ("is this appropriate for ages 3-8?"), or (b) reuse the OCR-extracted text through the FC-037 text classifier as a cheaper first pass. Fail-closed and route violations through the existing `safety_blocked` path, mirroring FC-037's output gate. Cost/latency tradeoff (one classifier call per page) needs measuring — the text gate is one call per story; a per-page vision gate is N calls.
 
 **Relates to:** FC-037 (text moderation gate + safetySettings — this is the deferred image half), FC-020 (baked-in text + OCR text-verify pipeline — OCR output could feed a cheaper vision-moderation first pass), FC-016 (latency — per-page vision calls add cost/latency to measure).
+
+---
+
+### FC-042: Upgrade @google/genai and convert FC-028 prompt-level ratio to config-level imageConfig.aspectRatio
+
+**Status:** Consideration
+**Size estimate:** S-M
+**Owner:** unassigned
+**Filed by:** FC-028 (Path B fallback — required follow-up per plan)
+
+**Provenance note:** number allocated 2026-07-08 during autonomous execution of FC-028; three other Wave B agents ran concurrently and may have grabbed adjacent numbers. If a collision surfaces, renumber this entry (it's a doc-only follow-up with no code claim yet).
+
+**Problem / opportunity:** FC-028 wanted to pin a 16:9 landscape ratio on all four backend image-generation calls via `config.imageConfig.aspectRatio`. The installed `@google/genai` **v0.7.0** exposes no such field on `GenerateContentConfig` (it lives only on `GenerateImagesConfig`/`GenerateVideosConfig`, unused by this app's `generateContent` + `responseModalities:['IMAGE']` pipeline), so a config-level pin fails `tsc`. FC-028 therefore shipped a **best-effort prompt-level** instruction (`ASPECT_RATIO_INSTRUCTION` in `backend/src/prompts/aspect.ts`, appended to all four prompt builders) — the model may not honor it exactly.
+
+**Idea:** upgrade `@google/genai` to a version whose `GenerateContentConfig` carries `imageConfig.aspectRatio` (newer releases added it), then replace/augment the prompt-level instruction with a real config-level pin at the four `ai.models.generateContent` image call sites in `gemini.ts`. A dependency bump is its own risk surface (safetySettings enums, response shape, retry semantics) — hence a separate FC, not folded into FC-028. Verify `'16:9'` is an allowed value against the upgraded `ImageConfig` type; measure whether the image model actually honors the config pin (FC-028's owner post-merge check measures real output dimensions and is the baseline). Keep the prompt-level instruction as belt-and-suspenders unless it's shown to conflict.
+
+**Relates to:** FC-028 (this is its required SDK-upgrade follow-up), FC-026/FC-038 (mobile contain/backdrop already handles ratio mismatch — this only shrinks letterbox bands for new stories).
 
 ---
 

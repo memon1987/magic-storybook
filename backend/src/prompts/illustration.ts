@@ -1,4 +1,5 @@
 import { ArtStyle, CharacterVisualSheet, SettingVisualIdentity } from '../types';
+import { ASPECT_RATIO_INSTRUCTION } from './aspect';
 
 /**
  * Style descriptions for different art styles
@@ -134,12 +135,14 @@ IMPORTANT: NO text, words, letters, or numbers in the image`;
 - The text zone (bottom band) blends softly into the illustration through a gradient or soft wash
 - The illustration occupies the majority of the page (top ~75%)
 - Clear focal point (characters should be prominent)
-- Landscape orientation (wider than tall)`;
+- Landscape orientation (wider than tall)
+- ${ASPECT_RATIO_INSTRUCTION}`;
   } else {
     compositionBlock = `COMPOSITION:
 - Fully illustrated landscape page; no text zone
 - Clear focal point (characters should be prominent)
-- Landscape orientation (wider than tall)`;
+- Landscape orientation (wider than tall)
+- ${ASPECT_RATIO_INSTRUCTION}`;
   }
 
   return `Create a ${styleDesc} children's picture book page.

@@ -1,4 +1,5 @@
 import { ArtStyle } from '../types';
+import { ASPECT_RATIO_INSTRUCTION } from './aspect';
 
 /**
  * Style descriptors mirrored from illustration.ts and characterReference.ts.
@@ -67,6 +68,7 @@ TEXT REQUIREMENTS:
 
 COMPOSITION:
 - LANDSCAPE orientation (wider than tall) — this is a full-page cover image
+- ${ASPECT_RATIO_INSTRUCTION}
 - Central subject placement: the main character(s) should sit roughly in the center of the frame so a portrait-aspect crop (used as a library thumbnail) shows them cleanly without cutting heads off
 - Cover should evoke the spirit of the book at a glance
 - Bright, saturated, joyful colors with warm undertones
