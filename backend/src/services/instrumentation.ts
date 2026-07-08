@@ -33,10 +33,11 @@ export type Stage =
   | 'anchor_pages_total'     // entire sequential anchor batch
   | 'parallel_pages_total'   // entire bounded-concurrency parallel batch
   | 'all_illustrations'      // generateAllIllustrations end-to-end
+  | 'moderation'             // FC-037: output moderation gate on story text
   | 'firestore_persist'      // batch.commit in the route
   | 'total';                 // whole route handler end-to-end
 
-export type CallKind = 'story_text' | 'char_ref' | 'cast_ref' | 'title_page' | 'page';
+export type CallKind = 'story_text' | 'char_ref' | 'cast_ref' | 'title_page' | 'page' | 'moderation';
 
 export interface StageEvent {
   storyId: string;

@@ -5,6 +5,7 @@ import { authMiddleware } from '../middleware/auth';
 import { WRITING_STYLE_IDS } from '../prompts/story';
 import { runStoryWorker, LockHeldError, StoryNotResumableError, WORKER_ID } from '../services/worker';
 import { storyTag, emitStageEvent } from '../services/instrumentation';
+import { validateStoryInputSafety } from '../services/inputSafety';
 import {
   AuthRequest,
   StoryInput,
@@ -211,6 +212,36 @@ router.post('/generate', async (req: AuthRequest, res: Response) => {
   ) {
     res.status(400).json({
       error: `Invalid writingStyle. Must be: ${WRITING_STYLE_IDS.join(', ')}`,
+    });
+    return;
+  }
+
+  // FC-037 review LOW-7: validate childGender against its enum. It's an
+  // optional field, but an unknown value would otherwise reach Firestore
+  // (and the prompt via validateStoryInput) unchecked. Absent/null is fine
+  // (the field is optional); only a present, out-of-enum value is rejected.
+  if (
+    req.body.childGender !== undefined &&
+    req.body.childGender !== null &&
+    !['boy', 'girl'].includes(req.body.childGender)
+  ) {
+    res.status(400).json({
+      error: 'Invalid childGender. Must be: boy or girl',
+    });
+    return;
+  }
+
+  // FC-037 layer 1: kid-safe input validation. Runs AFTER enum/presence
+  // checks and BEFORE any story doc is created, so rejected free-text input
+  // never reaches a Gemini prompt, Firestore, or the worker. First failure
+  // wins; the reason code + field are surfaced, never the offending value.
+  const safety = validateStoryInputSafety(req.body);
+  if (!safety.ok) {
+    console.log(`POST /generate rejected by input safety: field=${safety.field} reason=${safety.reason} user=${userId}`);
+    res.status(400).json({
+      error: "Let's keep it kid-friendly! Please adjust the highlighted field.",
+      code: 'input_rejected',
+      field: safety.field,
     });
     return;
   }

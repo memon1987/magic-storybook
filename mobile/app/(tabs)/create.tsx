@@ -10,6 +10,7 @@ import {
   Platform,
   Pressable,
 } from 'react-native';
+import axios from 'axios';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -94,6 +95,43 @@ const INITIAL_FORM: FormData = {
   artStyle: 'watercolor',
 };
 
+// FC-037 layer 5 — client-side UX mirror of the server's kid-safe input
+// validation (backend/src/services/inputSafety.ts). Intentionally duplicated,
+// not a shared package (bundle weight + the client is trivially bypassable —
+// the SERVER is the enforcement point). Caps + charset match §1 of the plan.
+// NO profanity/obscenity lib on the client: server catches unsafe terms.
+const FIELD_CAPS = {
+  childName: 30,
+  favoriteAnimal: 40,
+  setting: 60,
+  moral: 40,
+} as const;
+
+type TextFieldKey = keyof typeof FIELD_CAPS;
+
+// Unicode letters + combining marks, whitespace, hyphen, both apostrophes —
+// admits "O'Brien", "Mary-Jane", "José"; rejects digits, emoji, symbols, and
+// prompt-injection punctuation. Mirrors SAFE_CHARS in inputSafety.ts.
+const SAFE_CHARS_RE = /^[\p{L}\p{M}\s'’-]+$/u;
+
+const KID_FRIENDLY_HINT =
+  "Let's keep it kid-friendly! Letters, spaces, hyphens and apostrophes only.";
+
+/**
+ * Returns an inline error string for the current value, or null when clean /
+ * empty. Empty is treated as "no error" here — the Continue button's own
+ * non-empty gate handles required-ness.
+ */
+function fieldError(field: TextFieldKey, value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  if (value.length > FIELD_CAPS[field]) {
+    return `Please keep this under ${FIELD_CAPS[field]} characters.`;
+  }
+  if (!SAFE_CHARS_RE.test(value)) return KID_FRIENDLY_HINT;
+  return null;
+}
+
 export default function CreateScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -116,6 +154,22 @@ export default function CreateScreen() {
       router.replace(`/story/${data.storyId}/generating`);
     },
     onError: (error) => {
+      // FC-037: services/api.ts has no response interceptor, so a server 400
+      // otherwise surfaces as the generic "Request failed with status code
+      // 400". When the server rejects input (code: 'input_rejected'), show its
+      // friendly, kid-appropriate message instead.
+      if (axios.isAxiosError(error) && error.response?.status === 400) {
+        const data = error.response.data as
+          | { error?: string; code?: string; field?: string }
+          | undefined;
+        if (data?.code === 'input_rejected') {
+          Alert.alert(
+            "Let's keep it kid-friendly!",
+            data.error ?? 'Please adjust your inputs and try again.',
+          );
+          return;
+        }
+      }
       const message = error instanceof Error ? error.message : 'Failed to start generation';
       Alert.alert('Failed to start', message);
     },
@@ -124,16 +178,21 @@ export default function CreateScreen() {
   const update = <K extends keyof FormData>(key: K, value: FormData[K]) =>
     setFormData((prev) => ({ ...prev, [key]: value }));
 
+  // FC-037: a text step advances only when the field is non-empty AND passes
+  // the client-side charset/length mirror (fieldError === null).
+  const textStepOk = (field: TextFieldKey) =>
+    formData[field].trim().length > 0 && fieldError(field, formData[field]) === null;
+
   const canContinue = useMemo(() => {
     switch (stepIndex) {
       case 0:
-        return formData.childName.trim().length > 0;
+        return textStepOk('childName');
       case 1:
-        return formData.favoriteAnimal.trim().length > 0;
+        return textStepOk('favoriteAnimal');
       case 2:
-        return formData.setting.trim().length > 0;
+        return textStepOk('setting');
       case 3:
-        return formData.moral.trim().length > 0;
+        return textStepOk('moral');
       case 4: // writing style — always has a default
       case 5: // length
       case 6: // art style
@@ -218,6 +277,7 @@ export default function CreateScreen() {
                 placeholder="e.g. Maya"
                 value={formData.childName}
                 onChange={(v) => update('childName', v)}
+                fieldKey="childName"
               />
             )}
             {stepIndex === 1 && (
@@ -228,6 +288,7 @@ export default function CreateScreen() {
                 value={formData.favoriteAnimal}
                 onChange={(v) => update('favoriteAnimal', v)}
                 suggestions={ANIMAL_SUGGESTIONS}
+                fieldKey="favoriteAnimal"
               />
             )}
             {stepIndex === 2 && (
@@ -238,6 +299,7 @@ export default function CreateScreen() {
                 value={formData.setting}
                 onChange={(v) => update('setting', v)}
                 suggestions={SETTING_SUGGESTIONS}
+                fieldKey="setting"
               />
             )}
             {stepIndex === 3 && (
@@ -248,6 +310,7 @@ export default function CreateScreen() {
                 value={formData.moral}
                 onChange={(v) => update('moral', v)}
                 suggestions={MORAL_SUGGESTIONS}
+                fieldKey="moral"
               />
             )}
             {stepIndex === 4 && (
@@ -312,10 +375,13 @@ interface TextStepProps {
   value: string;
   onChange: (v: string) => void;
   suggestions?: string[];
+  fieldKey: TextFieldKey;
 }
 
-function TextStep({ title, subtitle, placeholder, value, onChange, suggestions }: TextStepProps) {
+function TextStep({ title, subtitle, placeholder, value, onChange, suggestions, fieldKey }: TextStepProps) {
   const { palette } = useTheme();
+  // FC-037: inline client-side validation error (UX mirror of server rules).
+  const error = fieldError(fieldKey, value);
   return (
     <View style={styles.step}>
       <Text style={[styles.stepTitle, { color: palette.colors.textDark }]}>{title}</Text>
@@ -326,15 +392,19 @@ function TextStep({ title, subtitle, placeholder, value, onChange, suggestions }
           {
             color: palette.colors.textDark,
             backgroundColor: palette.colors.cardBg,
-            borderColor: `${palette.colors.textMuted}22`,
+            borderColor: error ? palette.colors.accent : `${palette.colors.textMuted}22`,
           },
         ]}
         placeholder={placeholder}
         placeholderTextColor={palette.colors.textMuted}
         value={value}
         onChangeText={onChange}
+        maxLength={FIELD_CAPS[fieldKey]}
         autoFocus
       />
+      {error && (
+        <Text style={[styles.inputError, { color: palette.colors.accent }]}>{error}</Text>
+      )}
       {suggestions && (
         <ScrollView
           horizontal
@@ -582,6 +652,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     fontFamily: 'Nunito_600SemiBold',
     fontSize: 18,
+  },
+  inputError: {
+    marginTop: 8,
+    fontFamily: 'Nunito_600SemiBold',
+    fontSize: 13,
   },
   chipRow: {
     gap: 8,

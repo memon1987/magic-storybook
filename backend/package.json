@@ -19,6 +19,7 @@
     "express": "^4.21.0",
     "firebase-admin": "^12.6.0",
     "helmet": "^8.0.0",
+    "obscenity": "^0.4.3",
     "uuid": "^10.0.0"
   },
   "devDependencies": {
