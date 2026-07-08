@@ -30,6 +30,8 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { GradientBackground } from '../../components/GradientBackground';
 import { ProgressBar } from '../../components/ProgressBar';
 import { AnimatedPressable } from '../../components/AnimatedPressable';
+import { ResponsiveContainer } from '../../components/ResponsiveContainer';
+import { computeGrid, useResponsive } from '../../hooks/useResponsive';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const ANIMAL_SUGGESTIONS = [
@@ -270,6 +272,7 @@ export default function CreateScreen() {
             exiting={SlideOutLeft.duration(280)}
             style={styles.stepWrap}
           >
+            <ResponsiveContainer padding={24} style={styles.stepContainer}>
             {stepIndex === 0 && (
               <TextStep
                 title="What's your child's name?"
@@ -331,31 +334,34 @@ export default function CreateScreen() {
                 onChange={(v) => update('artStyle', v)}
               />
             )}
+            </ResponsiveContainer>
           </Animated.View>
         </ScrollView>
       </KeyboardAvoidingView>
 
       <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-        <AnimatedPressable
-          onPress={handleContinue}
-          disabled={!canContinue || mutation.isPending}
-          style={[
-            styles.primaryButton,
-            {
-              backgroundColor: palette.colors.accent,
-              opacity: canContinue && !mutation.isPending ? 1 : 0.5,
-            },
-          ]}
-        >
-          <Text style={styles.primaryButtonText}>
-            {stepIndex === TOTAL_STEPS - 1 ? 'Create Story' : 'Continue'}
-          </Text>
-          <Ionicons
-            name={stepIndex === TOTAL_STEPS - 1 ? 'sparkles' : 'arrow-forward'}
-            size={18}
-            color="#FFFFFF"
-          />
-        </AnimatedPressable>
+        <ResponsiveContainer padding={24}>
+          <AnimatedPressable
+            onPress={handleContinue}
+            disabled={!canContinue || mutation.isPending}
+            style={[
+              styles.primaryButton,
+              {
+                backgroundColor: palette.colors.accent,
+                opacity: canContinue && !mutation.isPending ? 1 : 0.5,
+              },
+            ]}
+          >
+            <Text style={styles.primaryButtonText}>
+              {stepIndex === TOTAL_STEPS - 1 ? 'Create Story' : 'Continue'}
+            </Text>
+            <Ionicons
+              name={stepIndex === TOTAL_STEPS - 1 ? 'sparkles' : 'arrow-forward'}
+              size={18}
+              color="#FFFFFF"
+            />
+          </AnimatedPressable>
+        </ResponsiveContainer>
       </View>
 
       {/* FC-017 Phase 3: GeneratingOverlay removed. The mutation now resolves
@@ -380,11 +386,20 @@ interface TextStepProps {
 
 function TextStep({ title, subtitle, placeholder, value, onChange, suggestions, fieldKey }: TextStepProps) {
   const { palette } = useTheme();
+  // FC-027: gentle tablet up-scale of the two named type/size values.
+  const { scale } = useResponsive();
   // FC-037: inline client-side validation error (UX mirror of server rules).
   const error = fieldError(fieldKey, value);
   return (
     <View style={styles.step}>
-      <Text style={[styles.stepTitle, { color: palette.colors.textDark }]}>{title}</Text>
+      <Text
+        style={[
+          styles.stepTitle,
+          { color: palette.colors.textDark, fontSize: 26 * scale, lineHeight: 32 * scale },
+        ]}
+      >
+        {title}
+      </Text>
       <Text style={[styles.stepSubtitle, { color: palette.colors.textMuted }]}>{subtitle}</Text>
       <TextInput
         style={[
@@ -393,6 +408,7 @@ function TextStep({ title, subtitle, placeholder, value, onChange, suggestions, 
             color: palette.colors.textDark,
             backgroundColor: palette.colors.cardBg,
             borderColor: error ? palette.colors.accent : `${palette.colors.textMuted}22`,
+            height: 64 * scale,
           },
         ]}
         placeholder={placeholder}
@@ -442,9 +458,16 @@ interface WritingStyleStepProps {
 
 function WritingStyleStep({ value, onChange }: WritingStyleStepProps) {
   const { palette } = useTheme();
+  // FC-027: keep the step title's tablet scale consistent with the other steps.
+  const { scale } = useResponsive();
   return (
     <View style={styles.step}>
-      <Text style={[styles.stepTitle, { color: palette.colors.textDark }]}>
+      <Text
+        style={[
+          styles.stepTitle,
+          { color: palette.colors.textDark, fontSize: 26 * scale, lineHeight: 32 * scale },
+        ]}
+      >
         Pick a writing style
       </Text>
       <Text style={[styles.stepSubtitle, { color: palette.colors.textMuted }]}>
@@ -494,9 +517,16 @@ interface LengthStepProps {
 
 function LengthStep({ value, onChange }: LengthStepProps) {
   const { palette } = useTheme();
+  // FC-027: keep the step title's tablet scale consistent with the other steps.
+  const { scale } = useResponsive();
   return (
     <View style={styles.step}>
-      <Text style={[styles.stepTitle, { color: palette.colors.textDark }]}>
+      <Text
+        style={[
+          styles.stepTitle,
+          { color: palette.colors.textDark, fontSize: 26 * scale, lineHeight: 32 * scale },
+        ]}
+      >
         How long should it be?
       </Text>
       <Text style={[styles.stepSubtitle, { color: palette.colors.textMuted }]}>
@@ -546,13 +576,40 @@ interface ArtStyleStepProps {
 
 function ArtStyleStep({ value, onChange }: ArtStyleStepProps) {
   const { palette } = useTheme();
+  const { width, insets, deviceClass, contentMaxWidth, scale } = useResponsive();
+
+  // FC-027: replace the old hardcoded 3-up percent-width grid with gap-aware
+  // computed cells — 3-up on phones (pixel-comparable to before), 4-up on
+  // tablets.
+  // `stepContentWidth` mirrors the ResponsiveContainer's *inner* width: the
+  // container caps at contentMaxWidth+48 and pads 24 each side, so the content
+  // box is min(available, contentMaxWidth+48) − 48. `computeGrid` with
+  // min===max pins the column count while reusing its gap-aware cell math (no
+  // second solver).
+  const columns = deviceClass === 'tablet' ? 4 : 3;
+  const GRID_GAP = 12;
+  const stepContentWidth =
+    Math.min(width - insets.left - insets.right, contentMaxWidth + 48) - 48;
+  const { cellWidth } = computeGrid(stepContentWidth, {
+    gap: GRID_GAP,
+    min: columns,
+    max: columns,
+  });
+
   return (
     <View style={styles.step}>
-      <Text style={[styles.stepTitle, { color: palette.colors.textDark }]}>Pick an art style</Text>
+      <Text
+        style={[
+          styles.stepTitle,
+          { color: palette.colors.textDark, fontSize: 26 * scale, lineHeight: 32 * scale },
+        ]}
+      >
+        Pick an art style
+      </Text>
       <Text style={[styles.stepSubtitle, { color: palette.colors.textMuted }]}>
         Each style gives the story a different feel.
       </Text>
-      <View style={styles.styleGrid}>
+      <View style={[styles.styleGrid, { gap: GRID_GAP }]}>
         {ART_STYLE_OPTIONS.map((opt) => {
           const selected = value === opt.value;
           return (
@@ -562,6 +619,7 @@ function ArtStyleStep({ value, onChange }: ArtStyleStepProps) {
               style={[
                 styles.styleCard,
                 {
+                  width: cellWidth,
                   backgroundColor: palette.colors.cardBg,
                   borderColor: selected ? palette.colors.accent : `${palette.colors.textMuted}22`,
                   borderWidth: selected ? 2 : 1,
@@ -626,10 +684,15 @@ const styles = StyleSheet.create({
   },
   scroll: {
     flexGrow: 1,
-    paddingHorizontal: 24,
+    // FC-027: horizontal padding moved into the per-step ResponsiveContainer.
     paddingVertical: 24,
   },
   stepWrap: {
+    flex: 1,
+  },
+  // FC-027: the step's ResponsiveContainer must fill the step wrapper's height
+  // so vertically-centered / flex step content lays out as before on phones.
+  stepContainer: {
     flex: 1,
   },
   step: {
@@ -704,14 +767,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   styleGrid: {
+    // FC-027: `gap` is set inline (GRID_GAP) so the wrap spacing matches the
+    // gap the cellWidth math subtracts; 3-up phone / 4-up tablet via flexWrap.
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    rowGap: 12,
     marginTop: 8,
   },
   styleCard: {
-    width: '31%',
+    // FC-027: width is computed per-render (computeGrid cellWidth); the old
+    // hardcoded percent-width 3-up assumption is gone.
     aspectRatio: 0.85,
     borderRadius: 18,
     paddingVertical: 14,
@@ -731,7 +795,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   footer: {
-    paddingHorizontal: 24,
+    // FC-027: horizontal padding moved into the footer's ResponsiveContainer.
     paddingTop: 12,
   },
   primaryButton: {

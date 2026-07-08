@@ -15,6 +15,7 @@ import { GradientBackground } from '../../components/GradientBackground';
 import { SectionCard } from '../../components/SectionCard';
 import { AnimatedPressable } from '../../components/AnimatedPressable';
 import { ThemeSelectorModal } from '../../components/ThemeSelectorModal';
+import { ResponsiveContainer } from '../../components/ResponsiveContainer';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -83,6 +84,7 @@ export default function SettingsScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
+        <ResponsiveContainer padding={20} style={styles.container}>
         <Text style={[styles.title, { color: palette.colors.textDark }]}>Settings</Text>
 
         <SectionCard style={styles.profileCard}>
@@ -120,6 +122,7 @@ export default function SettingsScreen() {
           <Ionicons name="log-out-outline" size={20} color={palette.colors.accent} />
           <Text style={[styles.logoutText, { color: palette.colors.accent }]}>Sign Out</Text>
         </AnimatedPressable>
+        </ResponsiveContainer>
       </ScrollView>
 
       <ThemeSelectorModal
@@ -218,7 +221,12 @@ function Row({ row, palette, isLast }: RowProps) {
 
 const styles = StyleSheet.create({
   scroll: {
-    paddingHorizontal: 20,
+    // FC-027: horizontal padding + the vertical `gap` moved into the
+    // ResponsiveContainer (`styles.container`), which is now the flex parent
+    // of the scroll children. The scroll keeps only the inset-derived
+    // top/bottom padding (applied inline).
+  },
+  container: {
     gap: 16,
   },
   title: {

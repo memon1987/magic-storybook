@@ -17,9 +17,12 @@ import { GradientBackground } from '../../components/GradientBackground';
 import { SectionCard } from '../../components/SectionCard';
 import { AnimatedPressable } from '../../components/AnimatedPressable';
 import { SocialAuthButtons } from '../../components/SocialAuthButtons';
+import { ResponsiveContainer } from '../../components/ResponsiveContainer';
+import { useResponsive } from '../../hooks/useResponsive';
 
 export default function LoginScreen() {
   const { palette } = useTheme();
+  const { scale } = useResponsive();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -52,11 +55,24 @@ export default function LoginScreen() {
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={[styles.iconCircle, { backgroundColor: palette.colors.primary }]}>
+          <ResponsiveContainer padding={24} style={styles.container}>
+          <View
+            style={[
+              styles.iconCircle,
+              {
+                backgroundColor: palette.colors.primary,
+                width: 96 * scale,
+                height: 96 * scale,
+                borderRadius: 48 * scale,
+              },
+            ]}
+          >
             <Ionicons name="book" size={44} color={palette.colors.textDark} />
           </View>
 
-          <Text style={[styles.title, { color: palette.colors.textDark }]}>Welcome back!</Text>
+          <Text style={[styles.title, { color: palette.colors.textDark, fontSize: 32 * scale }]}>
+            Welcome back!
+          </Text>
           <Text style={[styles.subtitle, { color: palette.colors.textMuted }]}>
             Sign in to keep the magic going.
           </Text>
@@ -113,6 +129,7 @@ export default function LoginScreen() {
               </AnimatedPressable>
             </Link>
           </View>
+          </ResponsiveContainer>
         </ScrollView>
       </KeyboardAvoidingView>
     </GradientBackground>
@@ -124,8 +141,13 @@ const styles = StyleSheet.create({
   scroll: {
     flexGrow: 1,
     justifyContent: 'center',
-    paddingHorizontal: 24,
     paddingVertical: 40,
+    alignItems: 'center',
+  },
+  // FC-027: the ResponsiveContainer is the centered content box; it owns the
+  // 24pt horizontal padding (moved off `scroll`) and centers its children,
+  // preserving the previous `alignItems: 'center'` behavior on phones.
+  container: {
     alignItems: 'center',
   },
   iconCircle: {

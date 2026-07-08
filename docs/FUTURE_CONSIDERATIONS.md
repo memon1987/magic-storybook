@@ -220,7 +220,7 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-027: Responsive layout Phase 2 — iPad / landscape polish
 
-**Status:** Plan published
+**Status:** Executing (PR open)
 **Size estimate:** M
 **Owner:** Zeshan
 **Plan file:** [docs/plans/fc-027.md](plans/fc-027.md)
