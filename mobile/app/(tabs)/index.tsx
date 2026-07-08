@@ -36,7 +36,11 @@ function lightHaptic() {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const Haptics = require('expo-haptics');
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Review fix (FC-039 R1, LOW): impactAsync returns a promise whose
+    // rejection escapes this synchronous try/catch (e.g. transient native
+    // failure). Swallow it so a haptic hiccup never surfaces as an unhandled
+    // rejection.
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
   } catch {
     // no-op: module unavailable in this build
   }
@@ -86,15 +90,27 @@ export default function LibraryScreen() {
     onMutate: async (id: string) => {
       await queryClient.cancelQueries({ queryKey: ['stories'] });
       const previous = queryClient.getQueryData<Story[]>(['stories']);
+      // Capture JUST the row being removed so a failure can re-insert it
+      // without clobbering a concurrent successful delete (see onError).
+      const removed = previous?.find((s) => s.id === id);
       queryClient.setQueryData<Story[]>(['stories'], (old) =>
         (old ?? []).filter((s) => s.id !== id)
       );
-      return { previous };
+      return { removed };
     },
-    onError: (error, _id, ctx) => {
-      if (ctx?.previous) {
-        queryClient.setQueryData(['stories'], ctx.previous);
-      }
+    // Review fix (FC-039 R1, HIGH): reconcile from the LIVE cache rather than
+    // blindly restoring the pre-mutation snapshot. With two deletes in flight,
+    // restoring ctx.previous on a failed second delete would resurrect the story
+    // the first (successful) delete already removed. Instead we re-insert ONLY
+    // the specific failed row, and only if it's currently absent — preserving
+    // any sibling delete that landed in between. Position is cosmetic;
+    // onSettled's invalidate is the final source-of-truth reconcile.
+    onError: (error, id, ctx) => {
+      queryClient.setQueryData<Story[]>(['stories'], (live) => {
+        const rows = live ?? [];
+        if (!ctx?.removed || rows.some((s) => s.id === id)) return rows;
+        return [ctx.removed, ...rows];
+      });
       const message = error instanceof Error ? error.message : 'Failed to delete story';
       Alert.alert('Error', message);
     },
