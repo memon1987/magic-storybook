@@ -68,6 +68,7 @@ TEXT REQUIREMENTS:
 
 COMPOSITION:
 - LANDSCAPE orientation (wider than tall) — this is a full-page cover image
+- ${ASPECT_RATIO_INSTRUCTION}
 - Central subject placement: the main character(s) should sit roughly in the center of the frame so a portrait-aspect crop (used as a library thumbnail) shows them cleanly without cutting heads off
 - Cover should evoke the spirit of the book at a glance
 - Bright, saturated, joyful colors with warm undertones
@@ -76,7 +77,5 @@ CONSTRAINTS:
 - NO scary, dark, violent, or threatening elements
 - NO realistic human faces (stylized/cartoon only if humans appear)
 - NO additional text beyond the title above (no taglines, no author lines we didn't request, no chapter numbers)
-- Professional children's book cover quality
-
-${ASPECT_RATIO_INSTRUCTION}`;
+- Professional children's book cover quality`;
 }

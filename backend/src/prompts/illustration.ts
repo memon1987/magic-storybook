@@ -135,12 +135,14 @@ IMPORTANT: NO text, words, letters, or numbers in the image`;
 - The text zone (bottom band) blends softly into the illustration through a gradient or soft wash
 - The illustration occupies the majority of the page (top ~75%)
 - Clear focal point (characters should be prominent)
-- Landscape orientation (wider than tall)`;
+- Landscape orientation (wider than tall)
+- ${ASPECT_RATIO_INSTRUCTION}`;
   } else {
     compositionBlock = `COMPOSITION:
 - Fully illustrated landscape page; no text zone
 - Clear focal point (characters should be prominent)
-- Landscape orientation (wider than tall)`;
+- Landscape orientation (wider than tall)
+- ${ASPECT_RATIO_INSTRUCTION}`;
   }
 
   return `Create a ${styleDesc} children's picture book page.
@@ -171,7 +173,5 @@ IMPORTANT CONSTRAINTS:
 - NO realistic human faces (stylized/cartoon only if humans appear)
 - Everything must be magical, warm, gentle, and child-friendly
 - Professional children's book illustration quality
-- Age-appropriate for children ages 3-8 years old
-
-${ASPECT_RATIO_INSTRUCTION}`;
+- Age-appropriate for children ages 3-8 years old`;
 }

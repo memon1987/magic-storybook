@@ -3,12 +3,18 @@
  *
  * Path B (prompt-level): the installed `@google/genai` v0.7.0 has no
  * `imageConfig`/`aspectRatio` on `GenerateContentConfig`, so the 16:9 pin is a
- * shared prompt instruction appended to all four image-generation prompt
- * builders. These tests assert the pin is actually carried in the `contents`
- * sent to `generateContent` at EVERY image call site — page illustration,
- * character reference, cast reference, title page — plus a builder-level unit
- * test on each of the four prompt builders. If any call site drops the shared
- * instruction, a test here fails. See docs/plans/fc-028.md.
+ * shared prompt instruction placed in the COMPOSITION block of the two
+ * USER-VISIBLE image builders — page illustration and title page.
+ *
+ * SCOPE (review-narrowed from the plan's original "all four sites"): the pin is
+ * applied to the page + title builders ONLY. The character-reference and
+ * cast-lineup model sheets are internal (never shown to the user), so the
+ * letterboxing motivation does not apply to them; pinning them is pure downside
+ * on the consistency-critical multi-reference pipeline. These tests pin BOTH
+ * halves of that decision:
+ *   - page + title call sites MUST carry the instruction;
+ *   - char-ref + cast call sites MUST NOT.
+ * If any of those four invariants flips, a test here fails. See docs/plans/fc-028.md.
  *
  * Approach mirrors resume.test.ts: mock the Google SDKs at the boundary
  * (mock-before-import), but with a CAPTURING generateContent that records the
@@ -98,7 +104,7 @@ import {
  * Flatten the text of every text-part in a `contents` argument, whether it is
  * a string, a single part, or an array of {text}/{inlineData} parts. Returns
  * the concatenation of all text parts so we can assert the instruction is
- * present somewhere in the prompt.
+ * present (or absent) anywhere in the prompt.
  */
 function contentsText(contents: unknown): string {
   if (typeof contents === 'string') return contents;
@@ -108,26 +114,19 @@ function contentsText(contents: unknown): string {
     .join('\n');
 }
 
-/**
- * Assert that every captured image-generation call carries the shared 16:9
- * instruction in its prompt text AND still requests responseModalities: IMAGE.
- * `expectedCalls` guards against a call site silently not firing.
- */
-function assertAllCallsPinned(expectedCalls: number) {
-  expect(captured.length).toBe(expectedCalls);
-  for (const call of captured) {
-    expect(contentsText(call.contents)).toContain(ASPECT_RATIO_INSTRUCTION);
-    expect((call.config as { responseModalities?: string[] }).responseModalities).toEqual(['IMAGE']);
-  }
+/** The single captured image-generation call. Guards against a call site not firing. */
+function soleCall() {
+  expect(captured.length).toBe(1);
+  return captured[0];
 }
 
-describe('FC-028 — 16:9 aspect-ratio pin at every image call site', () => {
+describe('FC-028 — 16:9 pin on USER-VISIBLE image call sites (page + title)', () => {
   beforeEach(() => {
     captured.length = 0;
     vi.clearAllMocks();
   });
 
-  it('page illustration (generateIllustration) sends the pin', async () => {
+  it('page illustration (generateIllustration) sends the pin + keeps IMAGE modality', async () => {
     await generateIllustration(
       'A rabbit hops through a meadow.',
       'rabbit',
@@ -142,20 +141,44 @@ describe('FC-028 — 16:9 aspect-ratio pin at every image call site', () => {
       undefined,
       { verifyText: false }, // skip OCR verify loop — single generation
     );
-    assertAllCallsPinned(1);
+    const call = soleCall();
+    expect(contentsText(call.contents)).toContain(ASPECT_RATIO_INSTRUCTION);
+    expect((call.config as { responseModalities?: string[] }).responseModalities).toEqual(['IMAGE']);
   });
 
-  it('character reference (generateCharacterReference) sends the pin', async () => {
+  it('title page (generateTitlePage) sends the pin + keeps IMAGE modality', async () => {
+    await generateTitlePage(
+      { text: 'Mira the Rabbit', sceneDescription: 'a rabbit on a cover' },
+      'story-4',
+      'watercolor',
+      [],
+    );
+    const call = soleCall();
+    expect(contentsText(call.contents)).toContain(ASPECT_RATIO_INSTRUCTION);
+    expect((call.config as { responseModalities?: string[] }).responseModalities).toEqual(['IMAGE']);
+  });
+});
+
+describe('FC-028 — internal reference sheets do NOT carry the pin (scope guard)', () => {
+  beforeEach(() => {
+    captured.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('character reference (generateCharacterReference) does NOT send the pin', async () => {
     await generateCharacterReference(
       { name: 'Mira', description: 'a small rabbit' },
       'story-2',
       'watercolor',
       0,
     );
-    assertAllCallsPinned(1);
+    const call = soleCall();
+    expect(contentsText(call.contents)).not.toContain(ASPECT_RATIO_INSTRUCTION);
+    // Still a real image request — modality is unaffected by the scope narrowing.
+    expect((call.config as { responseModalities?: string[] }).responseModalities).toEqual(['IMAGE']);
   });
 
-  it('cast reference (generateCastReference) sends the pin', async () => {
+  it('cast reference (generateCastReference) does NOT send the pin', async () => {
     await generateCastReference(
       [
         { name: 'Mira', description: 'a small rabbit' },
@@ -164,28 +187,15 @@ describe('FC-028 — 16:9 aspect-ratio pin at every image call site', () => {
       'story-3',
       'watercolor',
     );
-    assertAllCallsPinned(1);
-  });
-
-  it('title page (generateTitlePage) sends the pin', async () => {
-    await generateTitlePage(
-      { text: 'Mira the Rabbit', sceneDescription: 'a rabbit on a cover' },
-      'story-4',
-      'watercolor',
-      [],
-    );
-    assertAllCallsPinned(1);
+    const call = soleCall();
+    expect(contentsText(call.contents)).not.toContain(ASPECT_RATIO_INSTRUCTION);
+    expect((call.config as { responseModalities?: string[] }).responseModalities).toEqual(['IMAGE']);
   });
 });
 
-describe('FC-028 — prompt builders embed the shared instruction', () => {
+describe('FC-028 — prompt builders: page + title embed the instruction; refs do not', () => {
   it('buildIllustrationPrompt (with page text) contains the instruction', () => {
-    const p = buildIllustrationPrompt(
-      'scene',
-      'rabbit',
-      'watercolor',
-      'Some page text.',
-    );
+    const p = buildIllustrationPrompt('scene', 'rabbit', 'watercolor', 'Some page text.');
     expect(p).toContain(ASPECT_RATIO_INSTRUCTION);
   });
 
@@ -199,12 +209,12 @@ describe('FC-028 — prompt builders embed the shared instruction', () => {
     expect(p).toContain(ASPECT_RATIO_INSTRUCTION);
   });
 
-  it('buildCharacterReferencePrompt contains the instruction', () => {
+  it('buildCharacterReferencePrompt does NOT contain the instruction', () => {
     const p = buildCharacterReferencePrompt('Mira', 'a small rabbit', 'watercolor');
-    expect(p).toContain(ASPECT_RATIO_INSTRUCTION);
+    expect(p).not.toContain(ASPECT_RATIO_INSTRUCTION);
   });
 
-  it('buildCastReferencePrompt contains the instruction', () => {
+  it('buildCastReferencePrompt does NOT contain the instruction', () => {
     const p = buildCastReferencePrompt(
       [
         { name: 'Mira', description: 'a small rabbit' },
@@ -212,6 +222,6 @@ describe('FC-028 — prompt builders embed the shared instruction', () => {
       ],
       'watercolor',
     );
-    expect(p).toContain(ASPECT_RATIO_INSTRUCTION);
+    expect(p).not.toContain(ASPECT_RATIO_INSTRUCTION);
   });
 });
