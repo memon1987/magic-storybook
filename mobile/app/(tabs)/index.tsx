@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -6,8 +6,9 @@ import {
   FlatList,
   RefreshControl,
   Alert,
+  Pressable,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Animated, {
@@ -24,6 +25,22 @@ import { useResponsive } from '../../hooks/useResponsive';
 import { GradientBackground } from '../../components/GradientBackground';
 import { StoryCard } from '../../components/StoryCard';
 import { AnimatedPressable } from '../../components/AnimatedPressable';
+import { deleteDisplayTitle } from '../../utils/storyDisplayTitle';
+
+// FC-039: light haptics on edit-mode entry + delete confirm. Lazily required
+// (same pattern as the FC-029 social-sign-in native modules) so a dev client /
+// TestFlight build 13 that predates the expo-haptics native module degrades to
+// silent no-haptics instead of crashing; full haptics arrive with the next EAS
+// build. Expo Go bundles expo-haptics, so it works there today.
+function lightHaptic() {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Haptics = require('expo-haptics');
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  } catch {
+    // no-op: module unavailable in this build
+  }
+}
 
 export default function LibraryScreen() {
   const router = useRouter();
@@ -55,13 +72,33 @@ export default function LibraryScreen() {
     },
   });
 
+  // FC-039: edit mode is LOCAL to this screen (no context/store). Long-press
+  // any card → enter; Done / empty-space tap / blur / last-story-deleted → exit.
+  const [isEditing, setIsEditing] = useState(false);
+
+  // FC-039: optimistic delete. Previously this only invalidated on success;
+  // now the card disappears immediately (onMutate removes it from the cache),
+  // rolls back on error, and reconciles with the server on settle. cancelQueries
+  // in onMutate + invalidateQueries in onSettled guard against the FC-031 15s
+  // refetchInterval landing mid-flight and resurrecting the deleted row.
   const deleteMutation = useMutation({
     mutationFn: deleteStory,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['stories'] }),
-    onError: (error) => {
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: ['stories'] });
+      const previous = queryClient.getQueryData<Story[]>(['stories']);
+      queryClient.setQueryData<Story[]>(['stories'], (old) =>
+        (old ?? []).filter((s) => s.id !== id)
+      );
+      return { previous };
+    },
+    onError: (error, _id, ctx) => {
+      if (ctx?.previous) {
+        queryClient.setQueryData(['stories'], ctx.previous);
+      }
       const message = error instanceof Error ? error.message : 'Failed to delete story';
       Alert.alert('Error', message);
     },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['stories'] }),
   });
 
   // FC-017 Phase 4: route by status. complete → reader; queued/generating/failed
@@ -78,32 +115,66 @@ export default function LibraryScreen() {
     [router]
   );
 
-  const handleStoryLongPress = useCallback(
+  // FC-039: long-press now ENTERS edit mode (no direct delete). Long-press
+  // while already editing is a no-op.
+  const handleStoryLongPress = useCallback((_story: Story) => {
+    setIsEditing((editing) => {
+      if (!editing) lightHaptic();
+      return true;
+    });
+  }, []);
+
+  // FC-039: badge tap (or VoiceOver "delete" action) → confirm Alert →
+  // optimistic delete. Confirm-dialog (not undo-snackbar) is the pre-made
+  // decision: stories cost ~$0.50–$1 and minutes to regenerate.
+  const handleDeleteRequest = useCallback(
     (story: Story) => {
-      const displayTitle = story.title?.trim() || `Story for ${story.childName}`;
-      Alert.alert('Delete Story', `Remove "${displayTitle}" from your library?`, [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => deleteMutation.mutate(story.id),
-        },
-      ]);
+      const displayTitle = deleteDisplayTitle(story);
+      Alert.alert(
+        'Delete this story?',
+        `"${displayTitle}" will be permanently removed.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => {
+              lightHaptic();
+              deleteMutation.mutate(story.id);
+            },
+          },
+        ]
+      );
     },
     [deleteMutation]
   );
 
+  // FC-039: leaving the tab / navigating away exits edit mode.
+  useFocusEffect(
+    useCallback(() => () => setIsEditing(false), [])
+  );
+
+  // FC-039: deleting the last story auto-exits edit mode (empty state renders).
+  useEffect(() => {
+    if (isEditing && stories.length === 0) {
+      setIsEditing(false);
+    }
+  }, [isEditing, stories.length]);
+
   const renderItem = useCallback(
-    ({ item }: { item: Story }) => (
+    ({ item, index }: { item: Story; index: number }) => (
       <View style={{ width: cellWidth }}>
         <StoryCard
           story={item}
           onPress={handleStoryPress}
           onLongPress={handleStoryLongPress}
+          editMode={isEditing}
+          onDeletePress={handleDeleteRequest}
+          jigglePhaseIndex={index}
         />
       </View>
     ),
-    [cellWidth, handleStoryPress, handleStoryLongPress]
+    [cellWidth, handleStoryPress, handleStoryLongPress, isEditing, handleDeleteRequest]
   );
 
   return (
@@ -124,11 +195,23 @@ export default function LibraryScreen() {
             Tap a story to start reading
           </Text>
         </View>
-        <View style={[styles.countBadge, { backgroundColor: palette.colors.primary }]}>
-          <Text style={[styles.countText, { color: palette.colors.textDark }]}>
-            {stories.length}
-          </Text>
-        </View>
+        {/* FC-039: while editing, a "Done" pill REPLACES the count badge. */}
+        {isEditing ? (
+          <AnimatedPressable
+            onPress={() => setIsEditing(false)}
+            style={[styles.donePill, { backgroundColor: palette.colors.accent }]}
+            accessibilityRole="button"
+            accessibilityLabel="Done editing"
+          >
+            <Text style={styles.doneText}>Done</Text>
+          </AnimatedPressable>
+        ) : (
+          <View style={[styles.countBadge, { backgroundColor: palette.colors.primary }]}>
+            <Text style={[styles.countText, { color: palette.colors.textDark }]}>
+              {stories.length}
+            </Text>
+          </View>
+        )}
       </View>
 
       <FlatList
@@ -139,9 +222,14 @@ export default function LibraryScreen() {
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
         numColumns={columns}
+        // FC-039: FlatList must re-render rows when edit mode toggles.
+        extraData={isEditing}
         columnWrapperStyle={{ gap, marginBottom: gap }}
         contentContainerStyle={[
           styles.listContent,
+          // FC-039: grow the content so the footer Pressable fills the space
+          // below the last row, giving a tap target to exit edit mode.
+          styles.listContentGrow,
           { paddingLeft: gutter + insets.left, paddingRight: gutter + insets.right },
           stories.length === 0 && styles.listContentEmpty,
         ]}
@@ -157,6 +245,20 @@ export default function LibraryScreen() {
             <EmptyState
               palette={palette.colors}
               onCreate={() => router.push('/(tabs)/create')}
+            />
+          ) : null
+        }
+        // FC-039: empty space below the last row is an exit-edit-mode surface.
+        // A no-op onPress when not editing keeps the tap inert. Do NOT move this
+        // to the FlatList onTouchStart — that bubbles from card touches and
+        // would swallow badge taps.
+        ListFooterComponent={
+          stories.length > 0 ? (
+            <Pressable
+              style={styles.footerExit}
+              onPress={() => {
+                if (isEditing) setIsEditing(false);
+              }}
             />
           ) : null
         }
@@ -247,11 +349,33 @@ const styles = StyleSheet.create({
     fontFamily: 'Nunito_700Bold',
     fontSize: 16,
   },
+  // FC-039: Done pill replaces the count badge while editing.
+  donePill: {
+    height: 36,
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  doneText: {
+    fontFamily: 'Nunito_700Bold',
+    fontSize: 15,
+    color: '#FFFFFF',
+  },
   listContent: {
     paddingBottom: 100,
   },
+  // FC-039: let the footer Pressable fill remaining space as an exit surface.
+  listContentGrow: {
+    flexGrow: 1,
+  },
   listContentEmpty: {
     flex: 1,
+  },
+  // FC-039: empty space below the last row exits edit mode when tapped.
+  footerExit: {
+    flexGrow: 1,
+    minHeight: 80,
   },
   emptyWrap: {
     flex: 1,
