@@ -87,6 +87,20 @@ interface FormData {
 
 const TOTAL_STEPS = 7;
 
+// FC-027: horizontal padding the step/footer ResponsiveContainer applies (per
+// side). The art-grid width math derives the container's inner content width
+// from this, so the grid and the container can never disagree on padding.
+const STEP_PADDING = 24;
+
+// FC-027: base type/size values that get gently up-scaled on tablet. Named
+// here (single source) so the StyleSheet base and the `* scale` inline
+// override read from the same number and can't silently desync on a future
+// edit. The StyleSheet entries reference these too.
+const STEP_TITLE_SIZE = 26;
+const STEP_TITLE_LINE_HEIGHT = 32;
+const BIG_INPUT_HEIGHT = 64;
+const BIG_INPUT_FONT_SIZE = 18;
+
 const INITIAL_FORM: FormData = {
   childName: '',
   favoriteAnimal: '',
@@ -272,7 +286,7 @@ export default function CreateScreen() {
             exiting={SlideOutLeft.duration(280)}
             style={styles.stepWrap}
           >
-            <ResponsiveContainer padding={24} style={styles.stepContainer}>
+            <ResponsiveContainer padding={STEP_PADDING} style={styles.stepContainer}>
             {stepIndex === 0 && (
               <TextStep
                 title="What's your child's name?"
@@ -340,7 +354,7 @@ export default function CreateScreen() {
       </KeyboardAvoidingView>
 
       <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-        <ResponsiveContainer padding={24}>
+        <ResponsiveContainer padding={STEP_PADDING}>
           <AnimatedPressable
             onPress={handleContinue}
             disabled={!canContinue || mutation.isPending}
@@ -395,7 +409,11 @@ function TextStep({ title, subtitle, placeholder, value, onChange, suggestions, 
       <Text
         style={[
           styles.stepTitle,
-          { color: palette.colors.textDark, fontSize: 26 * scale, lineHeight: 32 * scale },
+          {
+            color: palette.colors.textDark,
+            fontSize: STEP_TITLE_SIZE * scale,
+            lineHeight: STEP_TITLE_LINE_HEIGHT * scale,
+          },
         ]}
       >
         {title}
@@ -408,7 +426,10 @@ function TextStep({ title, subtitle, placeholder, value, onChange, suggestions, 
             color: palette.colors.textDark,
             backgroundColor: palette.colors.cardBg,
             borderColor: error ? palette.colors.accent : `${palette.colors.textMuted}22`,
-            height: 64 * scale,
+            // FC-027: scale the input's height AND its text together so the box
+            // and its type keep the same vertical rhythm on tablet.
+            height: BIG_INPUT_HEIGHT * scale,
+            fontSize: BIG_INPUT_FONT_SIZE * scale,
           },
         ]}
         placeholder={placeholder}
@@ -465,7 +486,11 @@ function WritingStyleStep({ value, onChange }: WritingStyleStepProps) {
       <Text
         style={[
           styles.stepTitle,
-          { color: palette.colors.textDark, fontSize: 26 * scale, lineHeight: 32 * scale },
+          {
+            color: palette.colors.textDark,
+            fontSize: STEP_TITLE_SIZE * scale,
+            lineHeight: STEP_TITLE_LINE_HEIGHT * scale,
+          },
         ]}
       >
         Pick a writing style
@@ -524,7 +549,11 @@ function LengthStep({ value, onChange }: LengthStepProps) {
       <Text
         style={[
           styles.stepTitle,
-          { color: palette.colors.textDark, fontSize: 26 * scale, lineHeight: 32 * scale },
+          {
+            color: palette.colors.textDark,
+            fontSize: STEP_TITLE_SIZE * scale,
+            lineHeight: STEP_TITLE_LINE_HEIGHT * scale,
+          },
         ]}
       >
         How long should it be?
@@ -576,20 +605,25 @@ interface ArtStyleStepProps {
 
 function ArtStyleStep({ value, onChange }: ArtStyleStepProps) {
   const { palette } = useTheme();
-  const { width, insets, deviceClass, contentMaxWidth, scale } = useResponsive();
+  const { width, deviceClass, contentMaxWidth, scale } = useResponsive();
 
   // FC-027: replace the old hardcoded 3-up percent-width grid with gap-aware
   // computed cells — 3-up on phones (pixel-comparable to before), 4-up on
   // tablets.
-  // `stepContentWidth` mirrors the ResponsiveContainer's *inner* width: the
-  // container caps at contentMaxWidth+48 and pads 24 each side, so the content
-  // box is min(available, contentMaxWidth+48) − 48. `computeGrid` with
-  // min===max pins the column count while reusing its gap-aware cell math (no
-  // second solver).
-  const columns = deviceClass === 'tablet' ? 4 : 3;
+  //
+  // `stepContentWidth` must mirror the ResponsiveContainer's *actual inner
+  // width* exactly. The container is `width:'100%'` of the full screen width
+  // (no ancestor subtracts horizontal insets), capped at contentMaxWidth ONLY
+  // on tablet, then padded STEP_PADDING each side. So the inner box is
+  // `min(fullWidth, cap) − 2*STEP_PADDING`, where the cap is contentMaxWidth on
+  // tablet and unbounded on phone. We do NOT subtract insets here — the
+  // container doesn't either, and subtracting them (as an earlier draft did)
+  // undersized cells in landscape-with-notch / Stage Manager panes.
+  const isTablet = deviceClass === 'tablet';
+  const columns = isTablet ? 4 : 3;
   const GRID_GAP = 12;
-  const stepContentWidth =
-    Math.min(width - insets.left - insets.right, contentMaxWidth + 48) - 48;
+  const cap = isTablet ? contentMaxWidth + STEP_PADDING * 2 : Infinity;
+  const stepContentWidth = Math.min(width, cap) - STEP_PADDING * 2;
   const { cellWidth } = computeGrid(stepContentWidth, {
     gap: GRID_GAP,
     min: columns,
@@ -601,7 +635,11 @@ function ArtStyleStep({ value, onChange }: ArtStyleStepProps) {
       <Text
         style={[
           styles.stepTitle,
-          { color: palette.colors.textDark, fontSize: 26 * scale, lineHeight: 32 * scale },
+          {
+            color: palette.colors.textDark,
+            fontSize: STEP_TITLE_SIZE * scale,
+            lineHeight: STEP_TITLE_LINE_HEIGHT * scale,
+          },
         ]}
       >
         Pick an art style
@@ -700,8 +738,8 @@ const styles = StyleSheet.create({
   },
   stepTitle: {
     fontFamily: 'Baloo2_700Bold',
-    fontSize: 26,
-    lineHeight: 32,
+    fontSize: STEP_TITLE_SIZE,
+    lineHeight: STEP_TITLE_LINE_HEIGHT,
   },
   stepSubtitle: {
     fontFamily: 'Quicksand_500Medium',
@@ -709,12 +747,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   bigInput: {
-    height: 64,
+    height: BIG_INPUT_HEIGHT,
     borderRadius: 16,
     borderWidth: 1,
     paddingHorizontal: 16,
     fontFamily: 'Nunito_600SemiBold',
-    fontSize: 18,
+    fontSize: BIG_INPUT_FONT_SIZE,
   },
   inputError: {
     marginTop: 8,

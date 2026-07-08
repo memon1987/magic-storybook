@@ -10,6 +10,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../../hooks/useAuth';
+import { useResponsive } from '../../hooks/useResponsive';
 import { useTheme } from '../../contexts/ThemeContext';
 import { GradientBackground } from '../../components/GradientBackground';
 import { SectionCard } from '../../components/SectionCard';
@@ -18,6 +19,10 @@ import { ThemeSelectorModal } from '../../components/ThemeSelectorModal';
 import { ResponsiveContainer } from '../../components/ResponsiveContainer';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
+
+// FC-027: base screen-title size, named so the StyleSheet base and the
+// `* scale` inline override share one number (no silent desync on edit).
+const TITLE_SIZE = 28;
 
 interface RowConfig {
   icon: IconName;
@@ -31,6 +36,10 @@ export default function SettingsScreen() {
   const { user, logout } = useAuth();
   const { palette } = useTheme();
   const insets = useSafeAreaInsets();
+  // FC-027: scale the screen title on tablet, consistent with the auth and
+  // create screen titles (otherwise Settings' heading reads phone-sized on
+  // iPad while every sibling screen's heading is +25%).
+  const { scale } = useResponsive();
   const [themeModalOpen, setThemeModalOpen] = useState(false);
 
   const handleLogout = () =>
@@ -85,7 +94,9 @@ export default function SettingsScreen() {
         showsVerticalScrollIndicator={false}
       >
         <ResponsiveContainer padding={20} style={styles.container}>
-        <Text style={[styles.title, { color: palette.colors.textDark }]}>Settings</Text>
+        <Text style={[styles.title, { color: palette.colors.textDark, fontSize: TITLE_SIZE * scale }]}>
+          Settings
+        </Text>
 
         <SectionCard style={styles.profileCard}>
           <View style={[styles.avatar, { backgroundColor: palette.colors.primary }]}>
@@ -231,7 +242,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontFamily: 'Baloo2_700Bold',
-    fontSize: 28,
+    fontSize: TITLE_SIZE,
     marginBottom: 8,
   },
   profileCard: {

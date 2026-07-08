@@ -20,6 +20,12 @@ import { SocialAuthButtons } from '../../components/SocialAuthButtons';
 import { ResponsiveContainer } from '../../components/ResponsiveContainer';
 import { useResponsive } from '../../hooks/useResponsive';
 
+// FC-027: base type/size values scaled on tablet. Named so the StyleSheet
+// base and the `* scale` inline overrides share one number (no silent desync).
+const ICON_CIRCLE_SIZE = 96;
+const ICON_GLYPH_SIZE = 44;
+const TITLE_SIZE = 32;
+
 export default function LoginScreen() {
   const { palette } = useTheme();
   const { scale } = useResponsive();
@@ -61,16 +67,18 @@ export default function LoginScreen() {
               styles.iconCircle,
               {
                 backgroundColor: palette.colors.primary,
-                width: 96 * scale,
-                height: 96 * scale,
-                borderRadius: 48 * scale,
+                width: ICON_CIRCLE_SIZE * scale,
+                height: ICON_CIRCLE_SIZE * scale,
+                borderRadius: (ICON_CIRCLE_SIZE / 2) * scale,
               },
             ]}
           >
-            <Ionicons name="book" size={44} color={palette.colors.textDark} />
+            <Ionicons name="book" size={ICON_GLYPH_SIZE * scale} color={palette.colors.textDark} />
           </View>
 
-          <Text style={[styles.title, { color: palette.colors.textDark, fontSize: 32 * scale }]}>
+          <Text
+            style={[styles.title, { color: palette.colors.textDark, fontSize: TITLE_SIZE * scale }]}
+          >
             Welcome back!
           </Text>
           <Text style={[styles.subtitle, { color: palette.colors.textMuted }]}>
@@ -151,9 +159,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   iconCircle: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
+    width: ICON_CIRCLE_SIZE,
+    height: ICON_CIRCLE_SIZE,
+    borderRadius: ICON_CIRCLE_SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 20,
@@ -165,7 +173,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontFamily: 'Baloo2_700Bold',
-    fontSize: 32,
+    fontSize: TITLE_SIZE,
     marginBottom: 6,
     textAlign: 'center',
   },
