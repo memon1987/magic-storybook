@@ -113,17 +113,16 @@ export function StoryCard({
   const handleDeletePress = () => onDeletePress?.(story);
 
   return (
-    // FC-039: the outer wrapper carries the jiggle transform AND the delete
-    // badge. The badge must live here (default overflow: visible), NOT inside
-    // styles.card which is overflow: 'hidden' and would clip the corner badge.
-    //
-    // Review fix (FC-039 R1, HIGH — Android): the wrapper reserves top/left
-    // padding (styles.jiggleWrap) and the card cancels it with a matching
-    // negative margin, so the on-screen layout is UNCHANGED but the badge +
-    // its hitSlop now sit INSIDE the wrapper's bounds. Android does not deliver
-    // touches to children positioned outside their parent's bounds (iOS does),
-    // so the previous top:-6/left:-6 badge was untappable on Android.
-    <Animated.View style={[styles.jiggleWrap, jiggleStyle]}>
+    // FC-039: the outer wrapper carries the jiggle transform. Its bounds equal
+    // the card's (no extra padding), so the card is NOT shifted within its
+    // fixed-width grid cell. The delete badge is a SIBLING rendered AFTER (over)
+    // the card so styles.card's overflow:'hidden' cannot clip it, while it still
+    // sits INSIDE the wrapper's bounds — which matters because Android does not
+    // deliver touches to a child positioned outside its parent's bounds (iOS
+    // does). The badge is therefore inset just inside the card's top-left corner
+    // (positive offset), not hanging outside it (the old top:-6/left:-6 badge
+    // was untappable on Android; R1 HIGH).
+    <Animated.View style={jiggleStyle}>
       <AnimatedPressable
         onPress={editMode ? undefined : () => onPress(story)}
         onLongPress={onLongPress ? () => onLongPress(story) : undefined}
@@ -233,11 +232,13 @@ export function StoryCard({
         </View>
       </AnimatedPressable>
 
-      {/* FC-039: delete badge — rendered only in edit mode, on the outer
-          wrapper (outside the card's overflow: 'hidden' so the corner-
-          overlapping circle is not clipped). Positioned at a POSITIVE inset
-          inside the wrapper's reserved padding so the badge + hitSlop stay
-          within parent bounds and remain tappable on Android (R1 HIGH fix). */}
+      {/* FC-039: delete badge — rendered only in edit mode, as a SIBLING over
+          the card (a child of the jiggle wrapper). Being a sibling keeps it
+          outside styles.card's overflow:'hidden' (not clipped) while staying
+          within the wrapper's bounds; positioned at a POSITIVE inset inside the
+          card corner so the badge + hitSlop remain within parent bounds and are
+          tappable on Android (R1 HIGH fix). See styles.deleteBadge for the
+          geometry. */}
       {editMode && (
         <Pressable
           style={[styles.deleteBadge, { backgroundColor: palette.colors.accent }]}
@@ -254,19 +255,7 @@ export function StoryCard({
   );
 }
 
-// FC-039: the jiggle wrapper reserves top/left padding so the delete badge and
-// its hitSlop sit entirely INSIDE the wrapper's bounds — Android does not deliver
-// touches to children positioned outside their parent's bounds (the old
-// top:-6/left:-6 badge was untappable on Android; R1 HIGH). The reserved inset
-// (badge circle radius 12 + hitSlop 12 = 24) is applied uniformly to every card,
-// so the FC-026 grid stays even; the card just insets a few pt within its cell.
-const BADGE_INSET = 24;
-
 const styles = StyleSheet.create({
-  jiggleWrap: {
-    paddingTop: BADGE_INSET,
-    paddingLeft: BADGE_INSET,
-  },
   card: {
     borderRadius: 16,
     overflow: 'hidden',
@@ -345,15 +334,19 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#fff',
   },
-  // FC-039: iOS-style delete badge overlapping the card's top-left corner.
-  // Positioned at (BADGE_INSET - 12) so the 24pt circle straddles the corner;
-  // with hitSlop 12 the touch target's outer edge lands exactly at the wrapper
-  // bound (0,0) — fully inside the parent, so it's tappable on Android. The
-  // effective touch target is 24 + 2*12 = 48pt (> Apple's 44pt minimum).
+  // FC-039: iOS-style delete badge inset inside the card's top-left corner.
+  // Rendered as a sibling OVER the card so styles.card's overflow:'hidden' can't
+  // clip it, and it stays within the jiggle wrapper's bounds so Android delivers
+  // its touches (Android drops touches outside a parent's bounds; the old
+  // top:-6/left:-6 badge was untappable on Android). Positioned at top/left:12
+  // with hitSlop:12 so the 24pt circle's full touch rect spans (0,0)→(48,48) —
+  // entirely inside the wrapper (= card bounds), and a 48pt effective target
+  // (> Apple's 44pt min). The wrapper adds NO padding, so there is no card shift
+  // vs the pre-FC-039 baseline.
   deleteBadge: {
     position: 'absolute',
-    top: BADGE_INSET - 12,
-    left: BADGE_INSET - 12,
+    top: 12,
+    left: 12,
     width: 24,
     height: 24,
     borderRadius: 12,
