@@ -330,7 +330,7 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-038: Library cover thumbnails clipped (contain, not cover)
 
-**Status:** Plan published
+**Status:** Executing
 **Size estimate:** S
 **Owner:** Zeshan
 **Plan file:** [docs/plans/fc-038.md](plans/fc-038.md)

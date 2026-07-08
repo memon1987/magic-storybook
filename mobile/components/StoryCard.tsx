@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ViewStyle, StyleProp, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ViewStyle, StyleProp, ActivityIndicator, Platform } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { AnimatedPressable } from './AnimatedPressable';
@@ -38,7 +38,41 @@ export function StoryCard({ story, onPress, onLongPress, style }: StoryCardProps
     >
       <View style={[styles.coverWrap, { backgroundColor: palette.colors.background }]}>
         {coverUrl ? (
-          <Image source={{ uri: coverUrl }} style={styles.cover} contentFit="cover" />
+          // FC-038: mirror the FC-026 reader fix at card scale — blurred
+          // cover-fit backdrop + dim + contain foreground, so the baked-in
+          // title text is never cropped by the fixed 3:4 box. Both layers
+          // share the same URI so the network fetch is deduped; note the
+          // backdrop's blur transform FORKS the cache key, so it is a
+          // separate decode + transform + cache entry (~2 decodes/cover).
+          //
+          // Review retune (2026-07-07): expo-image's `blurRadius` is applied
+          // in SOURCE-PIXEL space, not display points. Without help, a ~1024px
+          // Gemini cover in a ~110–170pt card blurs at full decode res BEFORE
+          // downscale, and iOS additionally HALVES the prop internally — so
+          // radius 16 rendered as a near-sharp ghost duplicate of the cover
+          // (doubled title text), not a frosted bed. Fixes:
+          //   • iOS: `enforceEarlyResizing` (iOS-only prop) resizes to the
+          //     container BEFORE the blur, moving it into ~display space (and
+          //     cutting the full-res transform cost). iOS halves the value and
+          //     now operates at view size, so we raise it to 20 (~10pt effective).
+          //   • Android: `BlurTransformation(min(r,25),4)` already runs at a
+          //     4× downsample (heavy frost) and clamps at 25, so a LOWER value
+          //     (8) reads equivalently without over-blurring to mush.
+          // Final on-device appearance still depends on real Gemini source
+          // resolution (backend does not pin size until FC-028) → on-device
+          // screenshot tuning is an explicit pre-EAS-build gate (PR body).
+          <>
+            <Image
+              source={{ uri: coverUrl }}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+              blurRadius={Platform.select({ ios: 20, android: 8, default: 16 })}
+              enforceEarlyResizing
+              transition={150}
+            />
+            <View style={[StyleSheet.absoluteFill, styles.coverDim]} />
+            <Image source={{ uri: coverUrl }} style={styles.cover} contentFit="contain" />
+          </>
         ) : (
           <View style={styles.placeholder}>
             <Ionicons
@@ -116,6 +150,11 @@ const styles = StyleSheet.create({
   cover: {
     width: '100%',
     height: '100%',
+  },
+  // FC-038: mutes the blurred backdrop so the sharp contain-fit foreground
+  // pops (reader uses 0.35; cards sit on a light UI, so 0.25).
+  coverDim: {
+    backgroundColor: 'rgba(0,0,0,0.25)',
   },
   placeholder: {
     flex: 1,
