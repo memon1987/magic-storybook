@@ -327,6 +327,21 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
+### FC-043: Enable GCP Cloud Build CI/CD — auto-deploy backend on merge to main
+
+**Status:** Plan published
+**Size estimate:** S
+**Owner:** Zeshan
+**Plan file:** [docs/plans/fc-043.md](plans/fc-043.md)
+
+**Problem / opportunity:** The backend deploy pipeline is 95% built but never wired: `cloudbuild.yaml` is a full test→build→deploy pipeline (FC-032's `npm test` gate + pinned Cloud Run flags), and a GitHub↔GCP connection (`github-connection`, region `us-central1`) already links `memon1987/ai-storybook-app` — but **there are zero Cloud Build triggers**, so merges to `main` deploy nothing. Deploys have been manual and easy to forget: verified 2026-07-08 that FC-037 (safety), FC-041 (vision moderation), FC-028 (aspect), and FC-016 instrumentation all merged to `main` but were never deployed (the live Cloud Run revision runs a pre-merge image). The child-safety gates were sitting unshipped.
+
+**Decision (published):** create one 2nd-gen Cloud Build trigger on the existing `github-connection` — branch `^main$`, build config `cloudbuild.yaml`, **path-filtered to `backend/**` + `cloudbuild.yaml`** so docs/mobile-only merges don't pointlessly rebuild+redeploy the backend. Auto-deploy straight to prod (MVP; backed by the `npm test` gate + the two-reviewer merge process). **Explicitly deferred to FC-009:** a staging environment and a manual-approval gate — auto-to-prod is accepted for the current pre-launch, low-user stage, with Cloud Run revision rollback (FC-032 runbook) as the safety net.
+
+**Relates to:** FC-032 (wrote the `cloudbuild.yaml` test gate + pinned deploy flags this trigger invokes), FC-009 (infra improvements — staging + approval gate live there), FC-024 (PR test CI, complementary — this adds the deploy half).
+
+---
+
 ## Completed
 
 ### FC-040: Reader page-turn polish — tap-to-turn animated curl — Done 2026-07-07

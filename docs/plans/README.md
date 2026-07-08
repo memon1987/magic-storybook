@@ -31,5 +31,6 @@ All plans below (except fc-016, which has human decision gates) carry an `## Exe
 - [fc-028.md](fc-028.md) — FC-028: Pin backend illustration aspect ratio, status: Plan published
 - [fc-039.md](fc-039.md) — FC-039: iOS-style library edit mode, status: Plan published
 - [fc-041.md](fc-041.md) — FC-041: Vision moderation pass on generated page images, status: Plan published
+- [fc-043.md](fc-043.md) — FC-043: Enable GCP Cloud Build CI/CD (auto-deploy backend on merge to main), status: Plan published
 
 _Done (indexed in the [Completed](../FUTURE_CONSIDERATIONS.md#completed) section): FC-024, FC-036, FC-037, FC-038, FC-040 (all merged 2026-07-07)._
