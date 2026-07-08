@@ -1,4 +1,5 @@
 import { ArtStyle, CharacterVisualSheet, SettingVisualIdentity } from '../types';
+import { ASPECT_RATIO_INSTRUCTION } from './aspect';
 
 /**
  * Style descriptions for different art styles
@@ -170,5 +171,7 @@ IMPORTANT CONSTRAINTS:
 - NO realistic human faces (stylized/cartoon only if humans appear)
 - Everything must be magical, warm, gentle, and child-friendly
 - Professional children's book illustration quality
-- Age-appropriate for children ages 3-8 years old`;
+- Age-appropriate for children ages 3-8 years old
+
+${ASPECT_RATIO_INSTRUCTION}`;
 }

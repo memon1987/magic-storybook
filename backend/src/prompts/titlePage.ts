@@ -1,4 +1,5 @@
 import { ArtStyle } from '../types';
+import { ASPECT_RATIO_INSTRUCTION } from './aspect';
 
 /**
  * Style descriptors mirrored from illustration.ts and characterReference.ts.
@@ -75,5 +76,7 @@ CONSTRAINTS:
 - NO scary, dark, violent, or threatening elements
 - NO realistic human faces (stylized/cartoon only if humans appear)
 - NO additional text beyond the title above (no taglines, no author lines we didn't request, no chapter numbers)
-- Professional children's book cover quality`;
+- Professional children's book cover quality
+
+${ASPECT_RATIO_INSTRUCTION}`;
 }

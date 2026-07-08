@@ -1,4 +1,5 @@
 import { ArtStyle } from '../types';
+import { ASPECT_RATIO_INSTRUCTION } from './aspect';
 
 /**
  * Style descriptors used by the regular illustration prompt — duplicated here
@@ -73,7 +74,9 @@ CONSTRAINTS:
 - Identical colors, clothing, proportions, and distinguishing features as their individual descriptions
 - NO scenery, NO speech bubbles, NO text or labels of any kind
 - Style suitable for a children's picture book ages 3-8
-- High clarity — this is a reference image; the size relationships must be unambiguous`;
+- High clarity — this is a reference image; the size relationships must be unambiguous
+
+${ASPECT_RATIO_INSTRUCTION}`;
 }
 
 export function buildCharacterReferencePrompt(
@@ -101,5 +104,7 @@ CONSTRAINTS:
 - NO other characters, NO scenery, NO speech bubbles, NO text or labels of any kind. This is a pure visual reference; the character's identity is established by the figures themselves, not by labels.
 - All three views must depict EXACTLY the same character with identical colors, clothing, proportions, and distinguishing features
 - Style suitable for a children's picture book ages 3-8: friendly, expressive, age-appropriate
-- High clarity — this image will be used as a reference for the model when generating subsequent story pages, so the character's distinguishing features must be unambiguous`;
+- High clarity — this image will be used as a reference for the model when generating subsequent story pages, so the character's distinguishing features must be unambiguous
+
+${ASPECT_RATIO_INSTRUCTION}`;
 }
