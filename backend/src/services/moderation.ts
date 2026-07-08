@@ -59,7 +59,10 @@ const KNOWN_CATEGORIES = [
   'malformed_classifier_output',
 ] as const;
 
-function sanitizeCategory(raw: unknown): string {
+// FC-041: exported so the vision-moderation gate (visionModeration.ts) reuses
+// the identical category allowlist — single-sourced, no story/model-string
+// leak into image-moderation errors either.
+export function sanitizeCategory(raw: unknown): string {
   if (typeof raw !== 'string' || raw.length === 0) return 'unspecified';
   const lowered = raw.toLowerCase();
   const match = KNOWN_CATEGORIES.find((c) => lowered.includes(c));

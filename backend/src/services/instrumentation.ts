@@ -34,10 +34,11 @@ export type Stage =
   | 'parallel_pages_total'   // entire bounded-concurrency parallel batch
   | 'all_illustrations'      // generateAllIllustrations end-to-end
   | 'moderation'             // FC-037: output moderation gate on story text
+  | 'vision_moderation'      // FC-041: per-image vision moderation gate on generated images
   | 'firestore_persist'      // batch.commit in the route
   | 'total';                 // whole route handler end-to-end
 
-export type CallKind = 'story_text' | 'char_ref' | 'cast_ref' | 'title_page' | 'page' | 'moderation';
+export type CallKind = 'story_text' | 'char_ref' | 'cast_ref' | 'title_page' | 'page' | 'moderation' | 'vision_moderation';
 
 export interface StageEvent {
   storyId: string;

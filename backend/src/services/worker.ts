@@ -49,8 +49,10 @@ import {
   ArtStyle,
   FailureCode,
 } from '../types';
-import { generateStory, generateAllIllustrations, generateModerationText, AllIllustrationsResult } from './gemini';
+import { generateStory, generateAllIllustrations, generateModerationText, generateVisionModerationText, AllIllustrationsResult } from './gemini';
 import { moderateStoryText } from './moderation';
+import { moderateStoryImages, ModeratableImage } from './visionModeration';
+import { downloadRef, isOurBucketUrl } from './gcsDownload';
 import { JobState, JobStateWriter, progressMessage } from './jobState';
 import { emitStageEvent, storyTag } from './instrumentation';
 
@@ -381,6 +383,68 @@ async function runStoryWorkerImpl(storyId: string): Promise<RunStoryWorkerResult
       artStyle,
       input.childName,
       { state, writer },
+    );
+
+    // ----- FC-041: vision moderation gate -----
+    // All page URLs are known but the doc is NOT yet 'complete' (the finalize
+    // batch below is what sets status:'complete' + writes the pages
+    // subcollection). Re-download the CHILD-FACING images (title + each page)
+    // from GCS and classify each; ANY unsafe / malformed / timeout / errored
+    // verdict on ANY image throws a ModerationBlockedError → unwinds into the
+    // catch below → sanitizeFailureReason maps "safety blocked" to
+    // FailureCode 'safety_blocked' (reuses the existing safety UX; no new
+    // FailureCode; no 'complete' doc and no pages subcollection for a blocked
+    // story, because the gate runs BEFORE the finalize batch).
+    //
+    // Runs on EVERY terminal run (initial or resume) — image URLs live on the
+    // doc across a resume and generateAllIllustrations rehydrates/reuses them,
+    // so re-moderating the final image set before 'complete' is the safe
+    // invariant (no "already moderated" flag; the images are the source of
+    // truth). Cost: N+1 vision calls per story (each page + title); sequential
+    // with first-block short-circuit; 30s per-call timeout.
+    const candidateUrls: Array<{ url: string; label: string }> = [
+      ...(illustrations.titlePageImageUrl ? [{ url: illustrations.titlePageImageUrl, label: 'title' }] : []),
+      ...illustrations.pageUrls.map((url, i) => ({ url, label: `page-${i + 1}` })),
+    ];
+    const imagesToModerate: ModeratableImage[] = [];
+    for (const { url, label } of candidateUrls) {
+      // FC-041 review HIGH: downloadRef returns null for TWO different cases;
+      // they must NOT be treated identically or an unsafe child-facing image
+      // could reach 'complete' unmoderated when its download flakes:
+      //   (a) a NON-bucket URL (placehold.co placeholder from a failed image
+      //       GENERATION) — benign, correctly SKIPPED. A static placeholder is
+      //       safe and moderating a non-bucket URL is impossible.
+      //   (b) an OUR-bucket URL whose download THREW (transient 5xx / throttle /
+      //       network blip — caught in gcsDownload.ts and returned null). This
+      //       is a real child-facing image we simply couldn't read. Skipping it
+      //       would fail OPEN. FAIL CLOSED instead: throw so the story does NOT
+      //       reach 'complete'.
+      // Categorization: a download failure is an INFRA failure, NOT a
+      // content-safety failure — throw a PLAIN Error (message deliberately free
+      // of safety/blocked/policy) so sanitizeFailureReason maps it to the
+      // default 'generation_error' (RESUMABLE; FC-031's 3-attempt budget caps
+      // any loop on a permanently-unreadable object). ModerationBlockedError is
+      // reserved strictly for actual unsafe classifier verdicts.
+      const bytes = await downloadRef(url);
+      if (bytes) {
+        imagesToModerate.push({ data: bytes.data, mimeType: bytes.mimeType, label });
+      } else if (isOurBucketUrl(url)) {
+        // (b) our-bucket image that failed to download — fail closed as infra.
+        // The message deliberately AVOIDS safety/blocked/policy (so it does NOT
+        // map to safety_blocked) and INCLUDES "generation" so
+        // sanitizeFailureReason maps it to the RESUMABLE 'generation_error'
+        // (the /gemini|generative|generation|model/ branch), matching FC-031's
+        // retry-budget behavior for transient infra failures.
+        throw new Error(
+          `Vision moderation: could not re-download page image for classification during generation (${label}); failing closed pending retry`,
+        );
+      }
+      // else: (a) non-bucket placeholder — skip.
+    }
+    await moderateStoryImages(
+      imagesToModerate,
+      (prompt, image) => generateVisionModerationText(prompt, image, storyId),
+      { storyId },
     );
 
     // ----- Phase 6: finalize -----

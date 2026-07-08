@@ -1189,3 +1189,33 @@ export async function generateModerationText(prompt: string, storyId: string = '
   );
   return response.text || '';
 }
+
+/**
+ * FC-041: sibling of generateModerationText for the VISION moderation gate.
+ * Sends a fixed text instruction PLUS the page image as an inline input part
+ * to TEXT_MODEL, so the classifier reasons over the actual pixels + any
+ * baked-in text (not just the story's page text, which the FC-037 text gate
+ * already covered). The `{ text, inlineData }` contents array is the exact
+ * multimodal-INPUT shape gemini.ts already sends for character/cast/anchor
+ * references (see buildPageContents), so no new SDK capability is required —
+ * @google/genai 0.7.0's ContentListUnion accepts a PartUnion[] with an
+ * inlineData Blob (verified during execution step 1 against the SDK types).
+ *
+ * One call, no retry (fail-closed is visionModeration.ts's job — any
+ * error/timeout there blocks), instrumented as a 'vision_moderation' call.
+ * Returns the raw model text; the caller owns parsing + verdict logic.
+ */
+export async function generateVisionModerationText(
+  prompt: string,
+  image: { data: string; mimeType: string },
+  storyId: string = 'unknown',
+): Promise<string> {
+  const response = await instrumentedGenerateContent(storyId, 'vision_moderation', 1, () =>
+    ai.models.generateContent({
+      model: TEXT_MODEL,
+      contents: [{ text: prompt }, { inlineData: { data: image.data, mimeType: image.mimeType } }],
+      config: { safetySettings: SAFETY_SETTINGS },
+    }),
+  );
+  return response.text || '';
+}
