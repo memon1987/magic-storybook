@@ -29,11 +29,23 @@ export interface StorySnapshot {
   // to enforce the retry budget (cap auto-Resume at 3 attempts on a
   // failed story).
   attempt?: number;
-  // Other fields exist on the doc (childName, etc.) but the generating
-  // screen + library only need status/progress/failureReason/title/attempt.
-  // If additional rendering needs arise, extend this shape — don't spread
-  // the raw doc to avoid renderers reaching for internal fields like
-  // workerId or storyText.
+  // FC-036: explicit fields for the determinate progress model on the
+  // /generating screen (mobile/utils/storyProgress.ts).
+  childName?: string;
+  length?: 'short' | 'medium' | 'long';
+  // FC-025 B-6 flags — the only observable signal that cast/title
+  // generation finished (no `saveProgress` call ever writes the 'cast'
+  // or 'title' phases).
+  castAttempted?: boolean;
+  titleAttempted?: boolean;
+  // Size of the doc's `pageUrls` map (one key per completed page).
+  // Deliberately a COUNT: the page image URLs themselves never cross
+  // into the UI, so the loading screen can't spoil the story.
+  pageUrlsCount?: number;
+  // Other fields exist on the doc but the generating screen + library
+  // only need the shape above. If additional rendering needs arise,
+  // extend this shape — don't spread the raw doc to avoid renderers
+  // reaching for internal fields like workerId or storyText.
 }
 
 export type StorySubscriptionResult = StorySnapshot | { error: 'not_found' | 'permission_denied' | 'unknown' };
@@ -72,6 +84,12 @@ export function subscribeToStory(
         progress: data.progress as GenerationProgress | undefined,
         failureReason: data.failureReason as FailureCode | undefined,
         attempt: data.attempt as number | undefined,
+        // FC-036 progress-model fields (see StorySnapshot comments).
+        childName: data.childName as string | undefined,
+        length: data.length as 'short' | 'medium' | 'long' | undefined,
+        castAttempted: data.castAttempted as boolean | undefined,
+        titleAttempted: data.titleAttempted as boolean | undefined,
+        pageUrlsCount: Object.keys((data.pageUrls as Record<string, unknown> | undefined) ?? {}).length,
       });
     },
     (err) => {
