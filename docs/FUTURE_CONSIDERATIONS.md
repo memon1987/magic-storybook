@@ -294,7 +294,7 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-041: Vision moderation pass on generated pages
 
-**Status:** Plan published — [docs/plans/fc-041.md](plans/fc-041.md)
+**Status:** Executing — PR open ([docs/plans/fc-041.md](plans/fc-041.md))
 **Size estimate:** M
 **Owner:** Zeshan
 **Filed by:** FC-037 (explicit non-goal — deferred follow-up)

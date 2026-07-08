@@ -49,8 +49,10 @@ import {
   ArtStyle,
   FailureCode,
 } from '../types';
-import { generateStory, generateAllIllustrations, generateModerationText, AllIllustrationsResult } from './gemini';
+import { generateStory, generateAllIllustrations, generateModerationText, generateVisionModerationText, AllIllustrationsResult } from './gemini';
 import { moderateStoryText } from './moderation';
+import { moderateStoryImages, ModeratableImage } from './visionModeration';
+import { downloadRef } from './gcsDownload';
 import { JobState, JobStateWriter, progressMessage } from './jobState';
 import { emitStageEvent, storyTag } from './instrumentation';
 
@@ -381,6 +383,43 @@ async function runStoryWorkerImpl(storyId: string): Promise<RunStoryWorkerResult
       artStyle,
       input.childName,
       { state, writer },
+    );
+
+    // ----- FC-041: vision moderation gate -----
+    // All page URLs are known but the doc is NOT yet 'complete' (the finalize
+    // batch below is what sets status:'complete' + writes the pages
+    // subcollection). Re-download the CHILD-FACING images (title + each page)
+    // from GCS and classify each; ANY unsafe / malformed / timeout / errored
+    // verdict on ANY image throws a ModerationBlockedError → unwinds into the
+    // catch below → sanitizeFailureReason maps "safety blocked" to
+    // FailureCode 'safety_blocked' (reuses the existing safety UX; no new
+    // FailureCode; no 'complete' doc and no pages subcollection for a blocked
+    // story, because the gate runs BEFORE the finalize batch).
+    //
+    // Runs on EVERY terminal run (initial or resume) — image URLs live on the
+    // doc across a resume and generateAllIllustrations rehydrates/reuses them,
+    // so re-moderating the final image set before 'complete' is the safe
+    // invariant (no "already moderated" flag; the images are the source of
+    // truth). Cost: N+1 vision calls per story (each page + title); sequential
+    // with first-block short-circuit; 30s per-call timeout.
+    const candidateUrls: Array<{ url: string; label: string }> = [
+      ...(illustrations.titlePageImageUrl ? [{ url: illustrations.titlePageImageUrl, label: 'title' }] : []),
+      ...illustrations.pageUrls.map((url, i) => ({ url, label: `page-${i + 1}` })),
+    ];
+    const imagesToModerate: ModeratableImage[] = [];
+    for (const { url, label } of candidateUrls) {
+      // downloadRef returns null for placehold.co URLs (a page whose image
+      // GENERATION failed — a separate, benign degradation, not an unsafe
+      // image evading the gate) or a download failure. Such URLs are SKIPPED:
+      // a static placeholder is safe, and moderating a non-bucket URL is
+      // impossible. This does NOT weaken the gate.
+      const bytes = await downloadRef(url);
+      if (bytes) imagesToModerate.push({ data: bytes.data, mimeType: bytes.mimeType, label });
+    }
+    await moderateStoryImages(
+      imagesToModerate,
+      (prompt, image) => generateVisionModerationText(prompt, image, storyId),
+      { storyId },
     );
 
     // ----- Phase 6: finalize -----
