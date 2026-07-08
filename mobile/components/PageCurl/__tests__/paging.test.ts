@@ -68,4 +68,35 @@ describe('readerPageLabel', () => {
       expect(readerPageLabel({ ...base, index: 4 })).toBe('5 / 5');
     });
   });
+
+  // Every case above uses exactly 5 story pages, so the denominator
+  // (total content pages = pageCount - cover - end) is a constant, and a
+  // regression that hardcoded "/ 5" would pass. These cases use different
+  // story-page counts to independently pin that subtraction — the exact
+  // FC-022 "exclude synthetic cover + end from the human count" contract.
+  describe('denominator varies with story-page count', () => {
+    it('short story: cover + 2 story pages + end → 1 / 2', () => {
+      expect(
+        readerPageLabel({ pageCount: 4, hasCover: true, hasEndPage: true, index: 1 })
+      ).toBe('1 / 2');
+    });
+
+    it('short story: last story page → 2 / 2 (end excluded from total)', () => {
+      expect(
+        readerPageLabel({ pageCount: 4, hasCover: true, hasEndPage: true, index: 2 })
+      ).toBe('2 / 2');
+    });
+
+    it('long story: cover + 10 story pages + end → first is 1 / 10', () => {
+      expect(
+        readerPageLabel({ pageCount: 12, hasCover: true, hasEndPage: true, index: 1 })
+      ).toBe('1 / 10');
+    });
+
+    it('long story: last story page → 10 / 10', () => {
+      expect(
+        readerPageLabel({ pageCount: 12, hasCover: true, hasEndPage: true, index: 10 })
+      ).toBe('10 / 10');
+    });
+  });
 });
