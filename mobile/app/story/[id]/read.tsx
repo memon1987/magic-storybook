@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import ConfettiCannon from 'react-native-confetti-cannon';
@@ -34,9 +35,21 @@ export default function ReadScreen() {
   const router = useRouter();
   const { palette } = useTheme();
   const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
 
   const [currentPage, setCurrentPage] = useState(0);
   const [controlsVisible, setControlsVisible] = useState(true);
+  // FC-040 review fix (HIGH): measured rendered heights of the control bars so
+  // the Curl can exclude those vertical bands from its tap routing (a tap on the
+  // ✕ or a dot must never also turn/toggle underneath it). Measured via onLayout
+  // rather than hard-coded so safe-area padding / font scaling are accounted for.
+  const [topBarHeight, setTopBarHeight] = useState(0);
+  const [bottomBarHeight, setBottomBarHeight] = useState(0);
+  // FC-040 review fix (HIGH/MEDIUM): JS-thread busy latch, owned here and shared
+  // with Curl. Curl sets it synchronously on turn entry / clears it at rest; the
+  // dots row reads it to drop jumps while a turn is animating (goToPage otherwise
+  // bypasses Curl's internal guard and desyncs currentPage from the animation).
+  const busyRef = useRef(false);
   // Brief, non-blocking "best in landscape" hint that auto-dismisses. Unlike the
   // old blocking overlay, this never traps the reader if the landscape lock fails.
   const [hintVisible, setHintVisible] = useState(true);
@@ -121,6 +134,10 @@ export default function ReadScreen() {
   }, [isEndPage, currentPage]);
 
   const goToPage = (index: number) => {
+    // FC-040 review fix (MEDIUM): drop dot-jumps while a turn is in flight —
+    // goToPage sets currentPage directly, bypassing Curl's isAnimating/busy
+    // guard, so a jump mid-curl would desync currentPage from the animation.
+    if (busyRef.current) return;
     if (index < 0 || index >= pages.length) return;
     setCurrentPage(index);
     setControlsVisible(true);
@@ -130,9 +147,12 @@ export default function ReadScreen() {
   // the curl swipe (forward + backward); the dots row jumps to any page.
   const handleTap = () => setControlsVisible((v) => !v);
 
+  // FC-040: turning a page must NOT summon the bars. If they're already visible,
+  // the auto-hide timer resets naturally (the effect keyed on currentPage), so a
+  // turn while bars are up keeps them up a bit longer rather than re-showing them
+  // uninvited after every turn.
   const handlePageChange = (newPage: number) => {
     setCurrentPage(newPage);
-    setControlsVisible(true);
   };
 
   if (isLoading || !id) {
@@ -171,6 +191,10 @@ export default function ReadScreen() {
         totalPages={pages.length}
         onPageChange={handlePageChange}
         onTap={handleTap}
+        controlsVisible={controlsVisible}
+        topBandHeight={topBarHeight}
+        bottomBandHeight={bottomBarHeight}
+        busyRef={busyRef}
       />
 
       {isPortrait && hintVisible && (
@@ -189,16 +213,29 @@ export default function ReadScreen() {
         <Animated.View
           entering={FadeIn.duration(200)}
           exiting={FadeOut.duration(200)}
-          style={styles.topBar}
+          style={[
+            styles.topBar,
+            {
+              // FC-040: respect the safe area so the ✕ never lands inside the
+              // notch / Dynamic Island / rounded-corner region in landscape.
+              paddingTop: Math.max(12, insets.top),
+              paddingLeft: Math.max(12, insets.left),
+              paddingRight: Math.max(12, insets.right),
+            },
+          ]}
           pointerEvents="box-none"
+          onLayout={(e) => setTopBarHeight(e.nativeEvent.layout.height)}
         >
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.closeIconButton}>
-            <Ionicons name="close" size={26} color="#FFFFFF" />
-          </Pressable>
+          {/* Empty spacer mirrors the ✕ button so the title stays centered. */}
+          <View style={styles.closeIconButton} />
           <Text style={styles.headerTitle} numberOfLines={1}>
             {story.title}
           </Text>
-          <View style={styles.closeIconButton} />
+          {/* FC-040: ✕ moved to top-right (modal-close convention) with a 44×44
+              target + generous hitSlop for reliable tapping. */}
+          <Pressable onPress={() => router.back()} hitSlop={16} style={styles.closeIconButton}>
+            <Ionicons name="close" size={26} color="#FFFFFF" />
+          </Pressable>
         </Animated.View>
       )}
 
@@ -208,6 +245,7 @@ export default function ReadScreen() {
           exiting={FadeOut.duration(200)}
           style={styles.bottomBar}
           pointerEvents="box-none"
+          onLayout={(e) => setBottomBarHeight(e.nativeEvent.layout.height)}
         >
           <View style={styles.dotsRow}>
             {pages.map((_, idx) => (
@@ -310,14 +348,14 @@ const styles = StyleSheet.create({
     right: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingTop: 12,
+    // paddingTop / paddingLeft / paddingRight are applied inline from safe-area
+    // insets (FC-040); only the bottom padding is fixed here.
     paddingBottom: 12,
     backgroundColor: 'rgba(0,0,0,0.55)',
   },
   closeIconButton: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
