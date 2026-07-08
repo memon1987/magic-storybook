@@ -168,8 +168,17 @@ vi.mock('../gemini', () => ({
 }));
 
 // Mock gcsDownload so no real GCS fetch happens; steered per-test.
-const downloadMock = vi.hoisted(() => ({ downloadRef: vi.fn() }));
-vi.mock('../gcsDownload', () => ({ downloadRef: downloadMock.downloadRef }));
+// isOurBucketUrl mirrors the real prefix check (our-bucket GCS URL vs. a
+// non-bucket placeholder) so the worker gate can disambiguate the two
+// downloadRef→null cases (FC-041 review HIGH).
+const downloadMock = vi.hoisted(() => ({
+  downloadRef: vi.fn(),
+  isOurBucketUrl: vi.fn((url: string) => url.startsWith('https://storage.googleapis.com/test-bucket/')),
+}));
+vi.mock('../gcsDownload', () => ({
+  downloadRef: downloadMock.downloadRef,
+  isOurBucketUrl: downloadMock.isOurBucketUrl,
+}));
 
 // Import AFTER mocks.
 // eslint-disable-next-line import/first
@@ -289,6 +298,39 @@ describe('FC-041 worker vision-moderation seam', () => {
     expect(doc.status).toBe('complete');
     // Only title + p1 were moderated; the placeholder p2 was skipped.
     expect(geminiMock.generateVisionModerationText).toHaveBeenCalledTimes(2);
+  });
+
+  it('(HIGH) our-bucket page whose downloadRef returns null (transient download failure) → FAIL CLOSED, doc failed:generation_error (RESUMABLE, not safety_blocked), NO complete, NO pages', async () => {
+    seedQueuedDoc('story-img-dlfail');
+    // title + p1 are our-bucket; p1 fails to download (returns null) even
+    // though it IS our bucket → must fail closed as an infra error, NOT skip.
+    geminiMock.generateAllIllustrations.mockResolvedValue({
+      characterReferenceUrls: {},
+      castReferenceUrl: null,
+      titlePageImageUrl: `${GCS}/title.png`,
+      pageUrls: [`${GCS}/p1.png`, `${GCS}/p2.png`],
+    });
+    downloadMock.downloadRef.mockImplementation(async (url: string) =>
+      url.endsWith('/p1.png') ? null : { data: 'ZmFrZQ==', mimeType: 'image/png' },
+    );
+    geminiMock.generateVisionModerationText.mockResolvedValue(
+      JSON.stringify({ verdict: 'safe', category: 'none' }),
+    );
+
+    await expect(runStoryWorker('story-img-dlfail')).rejects.toBeTruthy();
+
+    const doc = fakeFirestoreInstance.getDoc('story-img-dlfail')!;
+    expect(doc.status).toBe('failed');
+    // CRITICAL: a download failure is INFRA, not content — must be the
+    // RESUMABLE generation_error, NOT safety_blocked (which FC-031 makes
+    // non-resumable + "create a new story", falsely blaming the content).
+    expect(doc.failureReason).toBe('generation_error');
+    expect(doc.status).not.toBe('complete');
+    expect(fakeFirestoreInstance.pageWriteCount()).toBe(0);
+    // The download loop rehydrates ALL images before any classify call; p1's
+    // null (our-bucket) throws mid-loop, so moderateStoryImages never runs →
+    // zero classifier calls.
+    expect(geminiMock.generateVisionModerationText).not.toHaveBeenCalled();
   });
 
   it('vision classifier REJECTION on an image → fail-closed: doc failed:safety_blocked, no complete', async () => {

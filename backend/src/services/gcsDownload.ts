@@ -36,6 +36,20 @@ function gcsObjectName(publicUrl: string): string | null {
   return publicUrl.slice(prefix.length);
 }
 
+/**
+ * FC-041: is this URL an object in OUR GCS bucket (vs. a non-bucket URL like a
+ * `placehold.co` placeholder)? Load-bearing for the vision-moderation gate:
+ * downloadRef returns null for BOTH a non-bucket placeholder (benign — skip)
+ * AND an our-bucket object whose download threw (an INFRA failure — must NOT
+ * be silently skipped, or an unsafe child-facing image could reach 'complete'
+ * unmoderated when its download flakes). The gate uses this predicate to tell
+ * the two null cases apart: a non-bucket URL is a real skip; an our-bucket URL
+ * that fails to download is a fail-closed infra error.
+ */
+export function isOurBucketUrl(publicUrl: string): boolean {
+  return gcsObjectName(publicUrl) !== null;
+}
+
 export interface DownloadedRef {
   data: string;      // base64-encoded image bytes
   mimeType: string;  // 'image/png' or 'image/jpeg'

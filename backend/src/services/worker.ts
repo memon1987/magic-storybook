@@ -52,7 +52,7 @@ import {
 import { generateStory, generateAllIllustrations, generateModerationText, generateVisionModerationText, AllIllustrationsResult } from './gemini';
 import { moderateStoryText } from './moderation';
 import { moderateStoryImages, ModeratableImage } from './visionModeration';
-import { downloadRef } from './gcsDownload';
+import { downloadRef, isOurBucketUrl } from './gcsDownload';
 import { JobState, JobStateWriter, progressMessage } from './jobState';
 import { emitStageEvent, storyTag } from './instrumentation';
 
@@ -408,13 +408,38 @@ async function runStoryWorkerImpl(storyId: string): Promise<RunStoryWorkerResult
     ];
     const imagesToModerate: ModeratableImage[] = [];
     for (const { url, label } of candidateUrls) {
-      // downloadRef returns null for placehold.co URLs (a page whose image
-      // GENERATION failed — a separate, benign degradation, not an unsafe
-      // image evading the gate) or a download failure. Such URLs are SKIPPED:
-      // a static placeholder is safe, and moderating a non-bucket URL is
-      // impossible. This does NOT weaken the gate.
+      // FC-041 review HIGH: downloadRef returns null for TWO different cases;
+      // they must NOT be treated identically or an unsafe child-facing image
+      // could reach 'complete' unmoderated when its download flakes:
+      //   (a) a NON-bucket URL (placehold.co placeholder from a failed image
+      //       GENERATION) — benign, correctly SKIPPED. A static placeholder is
+      //       safe and moderating a non-bucket URL is impossible.
+      //   (b) an OUR-bucket URL whose download THREW (transient 5xx / throttle /
+      //       network blip — caught in gcsDownload.ts and returned null). This
+      //       is a real child-facing image we simply couldn't read. Skipping it
+      //       would fail OPEN. FAIL CLOSED instead: throw so the story does NOT
+      //       reach 'complete'.
+      // Categorization: a download failure is an INFRA failure, NOT a
+      // content-safety failure — throw a PLAIN Error (message deliberately free
+      // of safety/blocked/policy) so sanitizeFailureReason maps it to the
+      // default 'generation_error' (RESUMABLE; FC-031's 3-attempt budget caps
+      // any loop on a permanently-unreadable object). ModerationBlockedError is
+      // reserved strictly for actual unsafe classifier verdicts.
       const bytes = await downloadRef(url);
-      if (bytes) imagesToModerate.push({ data: bytes.data, mimeType: bytes.mimeType, label });
+      if (bytes) {
+        imagesToModerate.push({ data: bytes.data, mimeType: bytes.mimeType, label });
+      } else if (isOurBucketUrl(url)) {
+        // (b) our-bucket image that failed to download — fail closed as infra.
+        // The message deliberately AVOIDS safety/blocked/policy (so it does NOT
+        // map to safety_blocked) and INCLUDES "generation" so
+        // sanitizeFailureReason maps it to the RESUMABLE 'generation_error'
+        // (the /gemini|generative|generation|model/ branch), matching FC-031's
+        // retry-budget behavior for transient infra failures.
+        throw new Error(
+          `Vision moderation: could not re-download page image for classification during generation (${label}); failing closed pending retry`,
+        );
+      }
+      // else: (a) non-bucket placeholder — skip.
     }
     await moderateStoryImages(
       imagesToModerate,
