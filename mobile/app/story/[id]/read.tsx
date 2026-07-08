@@ -39,6 +39,17 @@ export default function ReadScreen() {
 
   const [currentPage, setCurrentPage] = useState(0);
   const [controlsVisible, setControlsVisible] = useState(true);
+  // FC-040 review fix (HIGH): measured rendered heights of the control bars so
+  // the Curl can exclude those vertical bands from its tap routing (a tap on the
+  // ✕ or a dot must never also turn/toggle underneath it). Measured via onLayout
+  // rather than hard-coded so safe-area padding / font scaling are accounted for.
+  const [topBarHeight, setTopBarHeight] = useState(0);
+  const [bottomBarHeight, setBottomBarHeight] = useState(0);
+  // FC-040 review fix (HIGH/MEDIUM): JS-thread busy latch, owned here and shared
+  // with Curl. Curl sets it synchronously on turn entry / clears it at rest; the
+  // dots row reads it to drop jumps while a turn is animating (goToPage otherwise
+  // bypasses Curl's internal guard and desyncs currentPage from the animation).
+  const busyRef = useRef(false);
   // Brief, non-blocking "best in landscape" hint that auto-dismisses. Unlike the
   // old blocking overlay, this never traps the reader if the landscape lock fails.
   const [hintVisible, setHintVisible] = useState(true);
@@ -123,6 +134,10 @@ export default function ReadScreen() {
   }, [isEndPage, currentPage]);
 
   const goToPage = (index: number) => {
+    // FC-040 review fix (MEDIUM): drop dot-jumps while a turn is in flight —
+    // goToPage sets currentPage directly, bypassing Curl's isAnimating/busy
+    // guard, so a jump mid-curl would desync currentPage from the animation.
+    if (busyRef.current) return;
     if (index < 0 || index >= pages.length) return;
     setCurrentPage(index);
     setControlsVisible(true);
@@ -176,6 +191,10 @@ export default function ReadScreen() {
         totalPages={pages.length}
         onPageChange={handlePageChange}
         onTap={handleTap}
+        controlsVisible={controlsVisible}
+        topBandHeight={topBarHeight}
+        bottomBandHeight={bottomBarHeight}
+        busyRef={busyRef}
       />
 
       {isPortrait && hintVisible && (
@@ -205,6 +224,7 @@ export default function ReadScreen() {
             },
           ]}
           pointerEvents="box-none"
+          onLayout={(e) => setTopBarHeight(e.nativeEvent.layout.height)}
         >
           {/* Empty spacer mirrors the ✕ button so the title stays centered. */}
           <View style={styles.closeIconButton} />
@@ -225,6 +245,7 @@ export default function ReadScreen() {
           exiting={FadeOut.duration(200)}
           style={styles.bottomBar}
           pointerEvents="box-none"
+          onLayout={(e) => setBottomBarHeight(e.nativeEvent.layout.height)}
         >
           <View style={styles.dotsRow}>
             {pages.map((_, idx) => (

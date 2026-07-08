@@ -39,6 +39,18 @@ interface CurlProps {
   // Edge-zone taps drive page turns (handled internally); this callback never
   // navigates.
   onTap: () => void;
+  // FC-040 review fix (HIGH): the ✕ / dots are live RN Pressables that overlap
+  // the horizontal turn zones. When the bars are visible we exclude their
+  // vertical bands from the Curl's tap routing so a tap on the ✕ or a dot can
+  // never also turn/toggle underneath it. When hidden, the full zones turn.
+  controlsVisible?: boolean;
+  topBandHeight?: number;
+  bottomBandHeight?: number;
+  // FC-040 review fix (MEDIUM): a JS-thread busy latch the parent can read to
+  // drop dot-jumps while a turn is in flight (goToPage bypasses the internal
+  // guard otherwise, desyncing currentPage from the animation). Curl sets this
+  // synchronously on turn entry and clears it wherever the animation ends.
+  busyRef?: React.MutableRefObject<boolean>;
 }
 
 const CORNER_RADIUS = 0;
@@ -89,8 +101,23 @@ export function Curl({
   totalPages,
   onPageChange,
   onTap,
+  controlsVisible = false,
+  topBandHeight = 0,
+  bottomBandHeight = 0,
+  busyRef,
 }: CurlProps) {
   const pd = PixelRatio.get();
+
+  // FC-040 review fix (HIGH): JS-thread busy latch, set SYNCHRONOUSLY at the top
+  // of turnForward/turnBackward. `isAnimating` is a shared value whose JS-thread
+  // writes are async-batched (queueMicrotask), so a rapid double-tap can read a
+  // stale `false` before the first write flushes and slip two turns through
+  // (double-commit / flash). This ref is written and read synchronously on the
+  // JS thread, so two sequential turn calls are strictly ordered. It is cleared
+  // wherever `isAnimating` is cleared (useLayoutEffect reset + the !finished
+  // cancel branch). We fall back to a local ref if the parent doesn't pass one.
+  const localBusyRef = useRef(false);
+  const busy = busyRef ?? localBusyRef;
 
   const origin = useSharedValue(width);
   const pointer = useSharedValue(width);
@@ -154,9 +181,13 @@ export function Curl({
     pointer.value = width;
     isBackward.value = false;
     isAnimating.value = false;
+    // FC-040 review fix (HIGH): release the JS-thread busy latch in lock-step
+    // with isAnimating — the reset lands after every commit/resize, so the next
+    // turn (or dot-jump) is admitted only once the state machine is fully at rest.
+    busy.current = false;
     if (settleShared.value) settleClearReady.value = true;
     setDirection('forward');
-  }, [currentPage, width, origin, pointer, isBackward, isAnimating, settleShared, settleClearReady]);
+  }, [currentPage, width, origin, pointer, isBackward, isAnimating, settleShared, settleClearReady, busy]);
 
   // Exit gate: clear the settle state only after useLayoutEffect has reset the
   // curl values AND armed settleClearReady (both flush to the UI thread in the
@@ -166,6 +197,14 @@ export function Curl({
     setSettling(false);
     setSettleImage(null);
   }, []);
+
+  // FC-040 review fix (HIGH): clear the JS-thread busy latch from the animation's
+  // cancel (!finished) branch. That branch runs on the UI thread, so it must hop
+  // back via runOnJS to release the latch — otherwise a cancelled turn (resize /
+  // interrupt) would leave `busy` stuck true and wedge all further taps.
+  const clearBusy = useCallback(() => {
+    busy.current = false;
+  }, [busy]);
 
   useAnimatedReaction(
     () => settleShared.value && settleClearReady.value,
@@ -184,25 +223,55 @@ export function Curl({
   // full-screen page and the new currentPage are consistent (no wrong-page
   // frame between them).
   const commitForward = useCallback(() => {
+    const target = currentPage + 1;
+    // FC-040 review fix (MEDIUM): the settle gate can only be cleared by the
+    // useLayoutEffect that re-runs when currentPage changes. Entering the gate
+    // when the target equals the current page (React bails out of the state
+    // update → effect never re-runs) would wedge `settling=true` forever and
+    // freeze the reader on the settle image. The turn-entry boundary guard makes
+    // this impossible today, but we guard defensively: only arm the gate when
+    // the page will actually change. If it won't, unwind cleanly.
+    if (target === currentPage || target >= totalPages) {
+      settleShared.value = false;
+      busy.current = false;
+      isAnimating.value = false;
+      return;
+    }
     setSettleImage(nextImageRef.current);
     setSettling(true);
-    onPageChange(currentPage + 1);
-  }, [currentPage, onPageChange]);
+    onPageChange(target);
+  }, [currentPage, totalPages, onPageChange, settleShared, busy, isAnimating]);
 
   const commitBackward = useCallback(() => {
     // Backward target is the PREVIOUS page (it peels in on top and becomes the
     // new current page after onPageChange(currentPage - 1)).
+    const target = currentPage - 1;
+    // See commitForward: never arm the settle gate on a no-op page change.
+    if (target === currentPage || target < 0) {
+      settleShared.value = false;
+      busy.current = false;
+      isAnimating.value = false;
+      return;
+    }
     setSettleImage(previousImageRef.current);
     setSettling(true);
-    onPageChange(currentPage - 1);
-  }, [currentPage, onPageChange]);
+    onPageChange(target);
+  }, [currentPage, onPageChange, settleShared, busy, isAnimating]);
 
   // Fire-and-forget forward turn: current page peels off the right edge to reveal
   // the next page beneath. Direction/images are set on the JS thread BEFORE the
   // animation begins, so no wrong-image frame precedes the first animated frame.
   const turnForward = useCallback(() => {
-    if (isAnimating.value) return;
+    // FC-040 review fix (HIGH): synchronous busy check+set BEFORE the async
+    // shared-value write, so a double-tap can't slip a second turn through the
+    // race window between `isAnimating.value = true` and its batched flush.
+    if (busy.current || isAnimating.value) return;
+    // FC-040 review fix (MEDIUM): the settle gate can only clear when
+    // useLayoutEffect re-runs, which requires currentPage to actually change.
+    // This boundary guard is what guarantees the target page differs — enter the
+    // animation (and the gate) only when there is a real page to turn to.
     if (currentPage >= totalPages - 1) return;
+    busy.current = true;
     isAnimating.value = true;
     isBackward.value = false;
     setDirection('forward');
@@ -218,17 +287,24 @@ export function Curl({
           runOnJS(commitForward)();
         } else {
           isAnimating.value = false;
+          runOnJS(clearBusy)();
         }
       }
     );
-  }, [currentPage, totalPages, width, origin, pointer, isBackward, isAnimating, settleShared, commitForward]);
+  }, [currentPage, totalPages, width, origin, pointer, isBackward, isAnimating, settleShared, commitForward, busy, clearBusy]);
 
   // Fire-and-forget backward turn: the previous page un-peels in from the left
   // over the current page. Start fully curled (pointer=0) with images already
   // swapped, then sweep pointer 0→width.
   const turnBackward = useCallback(() => {
-    if (isAnimating.value) return;
+    // FC-040 review fix (HIGH): synchronous busy check+set BEFORE the async
+    // shared-value write (see turnForward).
+    if (busy.current || isAnimating.value) return;
+    // FC-040 review fix (MEDIUM): boundary guard guarantees the target page
+    // differs, so the commit always changes currentPage and the settle gate's
+    // useLayoutEffect re-runs to clear it — the gate can't wedge.
     if (currentPage <= 0) return;
+    busy.current = true;
     isAnimating.value = true;
     isBackward.value = true;
     setDirection('backward');
@@ -244,10 +320,11 @@ export function Curl({
           runOnJS(commitBackward)();
         } else {
           isAnimating.value = false;
+          runOnJS(clearBusy)();
         }
       }
     );
-  }, [currentPage, width, origin, pointer, isBackward, isAnimating, settleShared, commitBackward]);
+  }, [currentPage, width, origin, pointer, isBackward, isAnimating, settleShared, commitBackward, busy, clearBusy]);
 
   // FC-040: single Tap gesture routes by horizontal position. No Pan gesture —
   // the finger-tracked drag curl was removed. Zones: left 20% back / center 60%
@@ -258,16 +335,27 @@ export function Curl({
       Gesture.Tap()
         .maxDistance(8)
         .onEnd((e) => {
-          const zone = resolveTapZone(e.x, width);
+          // FC-040 review fix (HIGH): pass the tap's y + the chrome-band geometry
+          // so a tap that lands over the (visible) ✕ or dots bar routes to 'none'
+          // — the underlying RN Pressable owns it and the Curl neither turns nor
+          // toggles. When controls are hidden the bands are 0/ignored and the
+          // full-height edge/center zones apply as before.
+          const zone = resolveTapZone(e.x, width, e.y, {
+            controlsVisible,
+            topBandHeight,
+            bottomBandHeight,
+            height,
+          });
           if (zone === 'backward') {
             runOnJS(turnBackward)();
           } else if (zone === 'forward') {
             runOnJS(turnForward)();
-          } else {
+          } else if (zone === 'toggle') {
             runOnJS(onTap)();
           }
+          // zone === 'none': chrome band — do nothing; the Pressable handles it.
         }),
-    [width, turnForward, turnBackward, onTap]
+    [width, height, controlsVisible, topBandHeight, bottomBandHeight, turnForward, turnBackward, onTap]
   );
 
   // Forward: current curls away, next revealed beneath. Backward: previous curls
