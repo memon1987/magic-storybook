@@ -49,6 +49,15 @@ export interface StoryProgressResult {
    * The screen resets its elapsed-in-phase timer whenever this changes.
    */
   milestoneKey: string;
+  /**
+   * The next real boundary the creep asymptotes toward (the fraction the
+   * NEXT real signal would jump to). The displayed `fraction` is always
+   * strictly below this. Callers use it as the hard ceiling for the
+   * perceptible-motion floor (see applyCreepFloor) so a slow tail creep can
+   * never cross into an unlanded milestone. For terminal 'complete' it equals
+   * 1; for the malformed floor it equals MALFORMED_FLOOR (no headroom).
+   */
+  nextBoundary: number;
 }
 
 /**
@@ -101,6 +110,40 @@ export const TAU_MS = {
 
 /** Fraction shown for a malformed/unrecognized doc. */
 export const MALFORMED_FLOOR = 0.05;
+
+/**
+ * Reviewer fix (R2-2): minimum perceptible forward step the SCREEN applies
+ * per smoothing tick so the bar never appears parked in the long char-refs
+ * tail (τ=90s makes the asymptotic delta sub-pixel after ~2τ). This is a
+ * DISPLAY floor owned by the caller via applyCreepFloor — the pure creep math
+ * is unchanged; the floor only ever nudges the displayed value UP, and always
+ * stops strictly short of the band's real `nextBoundary`, so it can never
+ * claim an unlanded milestone. 0.0015/tick × 2 ticks/s ≈ 0.3%/s — visible on a
+ * standard track width without racing ahead of real work.
+ */
+export const MIN_TICK_DELTA = 0.0015;
+
+/**
+ * Caller-owned perceptible-motion floor (R2-2). Given the previously displayed
+ * fraction, the freshly computed fraction, and the band's real `nextBoundary`,
+ * return a value that (a) never goes backward, (b) is at least MIN_TICK_DELTA
+ * ahead of `prevDisplayed` when there is still headroom below the boundary, and
+ * (c) is always strictly less than `nextBoundary` (asymptotic honesty). Stateless.
+ */
+export function applyCreepFloor(
+  prevDisplayed: number,
+  computed: number,
+  nextBoundary: number,
+): number {
+  // Never regress: honest computed value is the floor's own floor.
+  const base = Math.max(prevDisplayed, computed);
+  // Hard ceiling: stay strictly below the next real boundary. Leave a hair of
+  // headroom (half a MIN_TICK_DELTA) so we never visually touch it.
+  const ceiling = nextBoundary - MIN_TICK_DELTA / 2;
+  if (!(ceiling > base)) return base; // no headroom → hold (already at/over ceiling)
+  const nudged = base + MIN_TICK_DELTA;
+  return Math.min(nudged, ceiling);
+}
 
 /**
  * Monotonic display clamp: the bar may never move backward — including
@@ -165,7 +208,7 @@ export function computeStoryProgress(
 
   // Terminal success — the only input that maps to exactly 1.0.
   if (doc.status === 'complete') {
-    return { fraction: 1, label: 'All done!', milestoneKey };
+    return { fraction: 1, label: 'All done!', milestoneKey, nextBoundary: 1 };
   }
 
   if (phase === 'finalizing') {
@@ -173,6 +216,7 @@ export function computeStoryProgress(
       fraction: smooth(BANDS.pagesEnd, 1, elapsedInPhaseMs, TAU_MS.finalizing),
       label: 'Sprinkling the final magic…',
       milestoneKey,
+      nextBoundary: 1,
     };
   }
 
@@ -185,10 +229,23 @@ export function computeStoryProgress(
     const base = BANDS.titleEnd + span * (done / pageTarget);
     const next = Math.min(BANDS.titleEnd + span * ((done + 1) / pageTarget), BANDS.pagesEnd);
     const paintingPage = Math.min(done + 1, pageTarget);
+    // Reviewer fix (R1-1 / R2-3): the "Painting page N of M" caption may only
+    // claim page-painting when the worker is actually in a page phase or a
+    // page has already landed. Both cast+title flags can be true (base crosses
+    // 0.70) while phase is still 'char-refs' and pageUrlsCount === 0 — and on a
+    // Resume that re-enters char-refs, pageUrls from the prior run are
+    // preserved so pagesDone>0 while refs are being redrawn. The bar (fraction)
+    // is honest in both, but claiming "page N" is not. Gate the copy on the
+    // real page signal; otherwise keep the cover caption.
+    const label =
+      inPagesPhase || pagesDone > 0
+        ? `Painting page ${paintingPage} of ${pageTarget}…`
+        : 'Painting the cover…';
     return {
       fraction: smooth(base, next, elapsedInPhaseMs, TAU_MS.perPage),
-      label: `Painting page ${paintingPage} of ${pageTarget}…`,
+      label,
       milestoneKey,
+      nextBoundary: next,
     };
   }
 
@@ -199,6 +256,7 @@ export function computeStoryProgress(
       fraction: smooth(BANDS.castEnd, BANDS.titleEnd, elapsedInPhaseMs, TAU_MS.castTitle),
       label: 'Painting the cover…',
       milestoneKey,
+      nextBoundary: BANDS.titleEnd,
     };
   }
 
@@ -209,6 +267,7 @@ export function computeStoryProgress(
         fraction: smooth(BANDS.charRefsEnd, BANDS.castEnd, elapsedInPhaseMs, TAU_MS.castTitle),
         label: 'Painting the cover…',
         milestoneKey,
+        nextBoundary: BANDS.castEnd,
       };
     }
     const span = BANDS.charRefsEnd - BANDS.storyTextEnd; // 0.40
@@ -222,6 +281,7 @@ export function computeStoryProgress(
       fraction: smooth(base, next, elapsedInPhaseMs, TAU_MS.charRefs),
       label: name ? `Drawing ${name} and friends…${counts}` : `Drawing the characters…${counts}`,
       milestoneKey,
+      nextBoundary: next,
     };
   }
 
@@ -236,6 +296,7 @@ export function computeStoryProgress(
       fraction: smooth(base, next, elapsedInPhaseMs, TAU_MS.storyText),
       label: name ? `Dreaming up ${name}’s story…` : 'Dreaming up the story…',
       milestoneKey,
+      nextBoundary: next,
     };
   }
 
@@ -244,13 +305,19 @@ export function computeStoryProgress(
       fraction: smooth(0, BANDS.queuedEnd, elapsedInPhaseMs, TAU_MS.queued),
       label: 'Warming up the crayons…',
       milestoneKey,
+      nextBoundary: BANDS.queuedEnd,
     };
   }
 
-  // Malformed / unknown doc.
+  // Malformed / unknown doc. Reviewer fix (R2-3): the plan's Verification
+  // table asserts exactly {fraction: 0.05, label: 'Starting…'} here, so return
+  // the friendly constant rather than a possibly-raw backend progress.message
+  // (which could leak an internal string for a garbage doc). The phase-branch
+  // labels above still use progress.message as their own live copy.
   return {
     fraction: MALFORMED_FLOOR,
-    label: doc.progress?.message || 'Starting…',
+    label: 'Starting…',
     milestoneKey,
+    nextBoundary: MALFORMED_FLOOR,
   };
 }

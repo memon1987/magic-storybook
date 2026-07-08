@@ -22,8 +22,14 @@
  * only a Reanimated shared value (no React re-render per tick). The bar
  * is monotonic via maxFractionRef + clampMonotonic — it holds its max
  * across Resume attempts (the worker rewinds phases; the bar doesn't).
- * Reduced motion: no tick loop, no bounce, no withTiming — the bar steps
- * on real snapshot milestones only.
+ * Reduced motion (reviewer fix R2-1): NO decorative/oscillating motion —
+ * the icon bounce loop and withTiming easing are disabled. But the progress
+ * bar itself must NOT freeze: the char-refs stage dominates runtime (~332s of
+ * ~440s) and emits its per-ref ticks only as parallel refs land near the end,
+ * so a purely snapshot-stepped bar would sit motionless at 0.15 for minutes.
+ * Under reduced motion the 500ms tick therefore still runs — it advances the
+ * bar directly (no easing) with a bounded real-time creep, kept perceptible by
+ * applyCreepFloor and always strictly below the next real boundary (honest).
  */
 import { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Pressable } from 'react-native';
@@ -47,7 +53,12 @@ import { GradientBackground } from '../../../components/GradientBackground';
 import { AnimatedPressable } from '../../../components/AnimatedPressable';
 import { subscribeToStory, StorySnapshot, StorySubscriptionResult } from '../../../services/stories';
 import { resumeStory, FailureCode } from '../../../services/api';
-import { computeStoryProgress, clampMonotonic, getExpectedPages } from '../../../utils/storyProgress';
+import {
+  computeStoryProgress,
+  clampMonotonic,
+  applyCreepFloor,
+  getExpectedPages,
+} from '../../../utils/storyProgress';
 
 const FAILURE_COPY: Record<FailureCode, string> = {
   generation_error: 'Something went wrong while creating the story.',
@@ -136,10 +147,11 @@ export default function GeneratingScreen() {
     return unsub;
   }, [id, router, progressSV]);
 
-  // FC-036: snapshot-driven bar update. In reduced-motion mode this is the
-  // ONLY thing that moves the bar (stepped, real milestones only, no
-  // withTiming); with motion it makes real milestone jumps land promptly
-  // between smoothing ticks.
+  // FC-036: snapshot-driven bar update. Makes a real milestone jump land
+  // promptly on the snapshot event (rather than waiting up to 500ms for the
+  // next tick). Under reduced motion it writes the value directly (no easing);
+  // with motion it eases. This never applies the creep floor — a snapshot is a
+  // real signal, so its clamped fraction is exact; the tick owns the creep.
   useEffect(() => {
     if (!result || 'error' in result) return;
     if (result.status !== 'queued' && result.status !== 'generating') return;
@@ -157,22 +169,37 @@ export default function GeneratingScreen() {
     }
   }, [result, reducedMotion, progressSV]);
 
-  // FC-036: 500ms smoothing tick — writes ONLY the shared value (no
-  // setState → no re-render storm). Cleared on unmount and whenever we
-  // leave the in-progress branch; disabled entirely under reduced motion.
+  // FC-036: 500ms smoothing tick — writes ONLY the shared value (no setState →
+  // no re-render storm). Runs in BOTH motion modes (reviewer fix R2-1): the
+  // char-refs stage dominates runtime and emits its ticks late, so without a
+  // real-time creep the bar would freeze for minutes — including for
+  // reduced-motion users, for whom the snapshot effect alone would leave the
+  // bar stepped-but-frozen. Reduced motion only removes the *easing*
+  // (withTiming) and the decorative bounce, not the forward progress.
+  //
+  // applyCreepFloor guarantees a perceptible minimum forward delta per tick
+  // (reviewer fix R2-2), bounded strictly below the band's next real boundary
+  // so the creep can never claim an unlanded milestone. Cleared on unmount and
+  // whenever we leave the in-progress branch.
   useEffect(() => {
-    if (!inProgress || reducedMotion) return;
+    if (!inProgress) return;
     const timer = setInterval(() => {
       const snap = latestSnapshotRef.current;
       if (!snap) return;
-      const { fraction } = computeStoryProgress(
+      const { fraction, nextBoundary } = computeStoryProgress(
         snap,
         getExpectedPages(snap.length),
         Date.now() - phaseStartedAtRef.current,
       );
       const clamped = clampMonotonic(maxFractionRef.current, fraction);
-      maxFractionRef.current = clamped;
-      progressSV.value = withTiming(clamped, { duration: 400 });
+      // Perceptible-motion floor, held strictly below the next real boundary.
+      const displayed = applyCreepFloor(maxFractionRef.current, clamped, nextBoundary);
+      maxFractionRef.current = displayed;
+      if (reducedMotion) {
+        progressSV.value = displayed;
+      } else {
+        progressSV.value = withTiming(displayed, { duration: 400 });
+      }
     }, 500);
     return () => clearInterval(timer);
   }, [inProgress, reducedMotion, progressSV]);
