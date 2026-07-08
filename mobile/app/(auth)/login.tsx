@@ -17,9 +17,18 @@ import { GradientBackground } from '../../components/GradientBackground';
 import { SectionCard } from '../../components/SectionCard';
 import { AnimatedPressable } from '../../components/AnimatedPressable';
 import { SocialAuthButtons } from '../../components/SocialAuthButtons';
+import { ResponsiveContainer } from '../../components/ResponsiveContainer';
+import { useResponsive } from '../../hooks/useResponsive';
+
+// FC-027: base type/size values scaled on tablet. Named so the StyleSheet
+// base and the `* scale` inline overrides share one number (no silent desync).
+const ICON_CIRCLE_SIZE = 96;
+const ICON_GLYPH_SIZE = 44;
+const TITLE_SIZE = 32;
 
 export default function LoginScreen() {
   const { palette } = useTheme();
+  const { scale } = useResponsive();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -52,11 +61,26 @@ export default function LoginScreen() {
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={[styles.iconCircle, { backgroundColor: palette.colors.primary }]}>
-            <Ionicons name="book" size={44} color={palette.colors.textDark} />
+          <ResponsiveContainer padding={24} style={styles.container}>
+          <View
+            style={[
+              styles.iconCircle,
+              {
+                backgroundColor: palette.colors.primary,
+                width: ICON_CIRCLE_SIZE * scale,
+                height: ICON_CIRCLE_SIZE * scale,
+                borderRadius: (ICON_CIRCLE_SIZE / 2) * scale,
+              },
+            ]}
+          >
+            <Ionicons name="book" size={ICON_GLYPH_SIZE * scale} color={palette.colors.textDark} />
           </View>
 
-          <Text style={[styles.title, { color: palette.colors.textDark }]}>Welcome back!</Text>
+          <Text
+            style={[styles.title, { color: palette.colors.textDark, fontSize: TITLE_SIZE * scale }]}
+          >
+            Welcome back!
+          </Text>
           <Text style={[styles.subtitle, { color: palette.colors.textMuted }]}>
             Sign in to keep the magic going.
           </Text>
@@ -113,6 +137,7 @@ export default function LoginScreen() {
               </AnimatedPressable>
             </Link>
           </View>
+          </ResponsiveContainer>
         </ScrollView>
       </KeyboardAvoidingView>
     </GradientBackground>
@@ -124,14 +149,19 @@ const styles = StyleSheet.create({
   scroll: {
     flexGrow: 1,
     justifyContent: 'center',
-    paddingHorizontal: 24,
     paddingVertical: 40,
     alignItems: 'center',
   },
+  // FC-027: the ResponsiveContainer is the centered content box; it owns the
+  // 24pt horizontal padding (moved off `scroll`) and centers its children,
+  // preserving the previous `alignItems: 'center'` behavior on phones.
+  container: {
+    alignItems: 'center',
+  },
   iconCircle: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
+    width: ICON_CIRCLE_SIZE,
+    height: ICON_CIRCLE_SIZE,
+    borderRadius: ICON_CIRCLE_SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 20,
@@ -143,7 +173,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontFamily: 'Baloo2_700Bold',
-    fontSize: 32,
+    fontSize: TITLE_SIZE,
     marginBottom: 6,
     textAlign: 'center',
   },
