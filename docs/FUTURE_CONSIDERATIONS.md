@@ -268,7 +268,7 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-039: iOS-style library edit mode (jiggle + delete badge)
 
-**Status:** Plan published
+**Status:** Executing — [PR #48](https://github.com/memon1987/ai-storybook-app/pull/48)
 **Size estimate:** M
 **Owner:** Zeshan
 **Plan file:** [docs/plans/fc-039.md](plans/fc-039.md)
