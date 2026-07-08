@@ -26,11 +26,6 @@ _Active (not-yet-Done) plans. Completed plans are indexed in the "Completed" sec
 
 All plans below (except fc-016, which has human decision gates) carry an `## Execution contract` and execute per [AUTONOMOUS_EXECUTION.md](AUTONOMOUS_EXECUTION.md) — isolated worktree/branch, goal-loop to green, two independent adversarial reviews + confirmation, stop at ready-to-merge.
 
-- [fc-016.md](fc-016.md) — FC-016: Story generation latency reduction, status: Executing (Phase 1 merged; Phases 2–4 pending; partial-autonomy contract)
-- [fc-027.md](fc-027.md) — FC-027: Responsive layout Phase 2 (iPad polish), status: Plan published
-- [fc-028.md](fc-028.md) — FC-028: Pin backend illustration aspect ratio, status: Plan published
-- [fc-039.md](fc-039.md) — FC-039: iOS-style library edit mode, status: Plan published
-- [fc-041.md](fc-041.md) — FC-041: Vision moderation pass on generated page images, status: Plan published
-- [fc-043.md](fc-043.md) — FC-043: Enable GCP Cloud Build CI/CD (auto-deploy backend on merge to main), status: Plan published
+- [fc-016.md](fc-016.md) — FC-016: Story generation latency reduction, status: Executing (Phase 1 merged; on hold 2026-07-08 pending production latency data; Phases 2–4 pending; partial-autonomy contract)
 
-_Done (indexed in the [Completed](../FUTURE_CONSIDERATIONS.md#completed) section): FC-024, FC-036, FC-037, FC-038, FC-040 (all merged 2026-07-07)._
+_Done (indexed in the [Completed](../FUTURE_CONSIDERATIONS.md#completed) section): FC-024, FC-036, FC-037, FC-038, FC-040 (merged 2026-07-07); FC-027, FC-028, FC-039, FC-041, FC-043 (merged 2026-07-08)._

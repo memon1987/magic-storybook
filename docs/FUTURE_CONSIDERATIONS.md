@@ -122,17 +122,24 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ### FC-009: Infrastructure improvements
 
-**Status:** Consideration
+**Status:** Consideration (scope narrowed 2026-07-08 — monitoring/alerting + auto-deploy now shipped elsewhere)
 **Size estimate:** M
 **Owner:** unassigned
 **Plan file:** not yet
 
-**Problem / opportunity:** No staging environment, no build notifications, no monitoring/alerting on Cloud Run.
+**Problem / opportunity:** Originally: no staging environment, no build notifications, no monitoring/alerting on Cloud Run. **Largely covered since:** **FC-032** (Done) shipped monitoring/alerting + 9 runbooks (Firestore PITR/backups, error-rate + sweep-orphan + Cloud Build failure alert policies, email notification channel), and **FC-043** (Done) wired Cloud Build CI/CD so backend merges to `main` auto-deploy to prod. What remains open here is the deliberately-deferred half:
+
+**Remaining open scope:**
+- A **staging environment** — a separate Cloud Run service + separate Firestore collection so changes can be exercised before prod (explicitly deferred here from FC-043).
+- A **manual-approval / promote gate** in front of prod (auto-to-prod was accepted for the current pre-launch, low-user stage; explicitly deferred here from FC-043).
+- Build-failure **notifications** if not already covered by FC-032's Cloud Build failure alert policy (verify the existing policy delivers where the team will see it, e.g. Slack; otherwise wire a webhook).
+
+**Cross-links:** FC-032 (monitoring/alerting + runbooks — Done), FC-043 (auto-deploy CD — Done).
 
 **Open questions:**
-- Staging Cloud Run service with separate Firestore collection?
-- Slack webhook for Cloud Build failures?
-- What latency/error thresholds to alert on?
+- Staging Cloud Run service with separate Firestore collection — how much config divergence (separate GCS bucket, separate Gemini quota)?
+- Manual-approval gate: Cloud Deploy pipeline, a `main`→`prod` promotion branch, or a Cloud Build approval step?
+- Is FC-032's Cloud Build failure alert already routed somewhere actionable (Slack), or does it need a webhook?
 
 ---
 
@@ -154,7 +161,7 @@ Copy this when adding a new consideration. Keep it short — detail belongs in t
 
 ### FC-016: Story generation latency reduction (deep research)
 
-**Status:** Executing — Phase 1 instrumentation merged (PR #23, `f5f9cb5`, 2026-05-27); Phase 1 baseline sweep + investigation note + Phases 2-4 still pending
+**Status:** Executing — Phase 1 instrumentation merged (PR #23, `f5f9cb5`, 2026-05-27); Phase 1 baseline sweep + investigation note + Phases 2-4 still pending. **On hold (2026-07-08):** paused pending accumulation of enough real production stories to run the Phase-1 baseline sweep (owner decision this session) — the FC-016 instrumentation only went live in prod today via FC-043's bootstrap deploy, so there is no production latency data yet. Revisit in a later session once enough stories have accrued.
 **Size estimate:** M-L (research first, then implementation)
 **Owner:** unassigned
 **Plan file:** [docs/plans/fc-016.md](plans/fc-016.md)
@@ -218,30 +225,6 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
-### FC-027: Responsive layout Phase 2 — iPad / landscape polish
-
-**Status:** Executing (PR open)
-**Size estimate:** M
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-027.md](plans/fc-027.md)
-
-**Problem / opportunity:** After FC-026 fixes the two critical bugs, the rest of the app still assumes a phone form factor on iPad. Finish `useResponsive` (`scale`, `contentMaxWidth`, `deviceClass`); add a `ResponsiveContainer` (center + max-width) for login/register/settings so cards/rows don't stretch edge-to-edge; fix `create.tsx` art-style grid `width:'31%'` (3-up phone → 4-up tablet) and cap the `'70%'` generating overlay; optional notch gutters on reader top/bottom bars.
-
----
-
-### FC-028: Pin backend image aspect ratio (optional)
-
-**Status:** Executing (PR open) — Path B (prompt-level) taken
-**Size estimate:** S
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-028.md](plans/fc-028.md)
-
-**Problem / opportunity:** With FC-026's reader `contain`, images letterbox by the gap between the generated ratio and the device ratio. Pinning `config.imageConfig.aspectRatio` (~16:9, verified against the installed `@google/genai` + `gemini-3.1-flash-image-preview` allowed ratios) on all four image calls in `backend/src/services/gemini.ts` would shrink those bands for **new** stories. Does not affect existing stories (baked images frozen) — the mobile `contain` change already covers those, which is why this is optional polish, not a fix.
-
-**SDK finding (execution, 2026-07-08):** installed `@google/genai` is **v0.7.0**; `GenerateContentConfig` (`dist/genai.d.ts:1104`) has **no `imageConfig`/`aspectRatio`** field — `aspectRatio` exists only on `GenerateImagesConfig`/`GenerateVideosConfig`, which this app does not use. A config-level pin fails `tsc`, so the plan's **Path B** (best-effort prompt-level 16:9 instruction, shared constant appended to all four prompt builders) was taken. Config-level pin arrives with the SDK-upgrade follow-up (FC-042).
-
----
-
 ### FC-033: Firestore emulator + integration tests for FC-017 concurrency-critical paths
 
 **Status:** Consideration
@@ -268,48 +251,6 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
-### FC-039: iOS-style library edit mode (jiggle + delete badge)
-
-**Status:** Executing — [PR #48](https://github.com/memon1987/ai-storybook-app/pull/48)
-**Size estimate:** M
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-039.md](plans/fc-039.md)
-
-**Problem / opportunity:** Deleting a story works today but is unintuitive: long-pressing a thumbnail ([mobile/app/(tabs)/index.tsx](../mobile/app/(tabs)/index.tsx) `handleStoryLongPress`) pops a confirm `Alert` and deletes via the existing `deleteStory` mutation. There's no visual affordance that long-press does anything, and no discoverable "delete" target. Replace it with the familiar **iOS home-screen edit mode**.
-
-**Idea:**
-- **Long-press any thumbnail → enter edit mode:** every card starts a subtle continuous **jiggle** (small rotation oscillation, staggered phase per card so they're not in sync) — Reanimated is already in the project.
-- Each card shows a **delete badge** (a "−"/"✕" in a circle) at the **top-left**.
-- **Tap the badge → delete** that story (reuse the existing `deleteStory` API + react-query `deleteMutation`, with optimistic removal). Tapping a card body while editing does NOT open the reader.
-- **Exit edit mode** via a **Done** button (header), tapping empty space, or back gesture; jiggle stops, badges hide, normal tap-to-open resumes.
-- Light **haptics** on entering edit mode and on delete.
-
-**Open questions:**
-- Confirm-on-delete vs immediate-with-undo? Stories are expensive to regenerate (~$0.50–$1 + minutes), so a confirm step or a brief undo window is safer than iOS's instant delete. Recommend keep a lightweight confirm or a 3-5s undo snackbar.
-- Reduced-motion / accessibility: disable the jiggle and instead surface an explicit **Edit/Done** toggle with static, clearly-labeled delete buttons.
-- Where the Done affordance lives (header right) and how it coexists with the existing count badge.
-- Reuse vs replace the current long-press `Alert` path (replace — but keep delete reachable for screen readers).
-
-**Relates to:** builds on the existing `deleteStory` flow ([api.ts](../mobile/services/api.ts) `deleteStory` → `DELETE /api/stories/:id`) and `StoryCard` ([mobile/components/StoryCard.tsx](../mobile/components/StoryCard.tsx)); FC-026 (responsive grid this renders in).
-
----
-
-### FC-041: Vision moderation pass on generated pages
-
-**Status:** Executing — PR open ([docs/plans/fc-041.md](plans/fc-041.md))
-**Size estimate:** M
-**Owner:** Zeshan
-**Filed by:** FC-037 (explicit non-goal — deferred follow-up)
-**Plan file:** [docs/plans/fc-041.md](plans/fc-041.md)
-
-**Problem / opportunity:** FC-037 added a *text* moderation gate over the generated story text (title + pages + titlePage), plus explicit `safetySettings` on every Gemini call. But there is still **no vision/OCR check on the generated illustrations themselves** before they're persisted and shown to a child. Nano-Banana bakes text INTO the image and renders characters/scenes; a prompt that passes text moderation could still yield an image with unsafe visual content or unsafe baked-in text that the text gate never saw (the illustration prompt derives from `sceneDescription` + style, not just page text). Model `safetySettings` are the only image-side guard today, and whether the image endpoint even honors them at runtime is unverified (FC-037 Risks).
-
-**Idea:** after page images are generated (and after the existing OCR text-verify pass), run a vision-moderation check — either (a) a multimodal classifier call over each generated page image ("is this appropriate for ages 3-8?"), or (b) reuse the OCR-extracted text through the FC-037 text classifier as a cheaper first pass. Fail-closed and route violations through the existing `safety_blocked` path, mirroring FC-037's output gate. Cost/latency tradeoff (one classifier call per page) needs measuring — the text gate is one call per story; a per-page vision gate is N calls.
-
-**Relates to:** FC-037 (text moderation gate + safetySettings — this is the deferred image half), FC-020 (baked-in text + OCR text-verify pipeline — OCR output could feed a cheaper vision-moderation first pass), FC-016 (latency — per-page vision calls add cost/latency to measure).
-
----
-
 ### FC-042: Upgrade @google/genai and convert FC-028 prompt-level ratio to config-level imageConfig.aspectRatio
 
 **Status:** Consideration
@@ -327,22 +268,42 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ---
 
-### FC-043: Enable GCP Cloud Build CI/CD — auto-deploy backend on merge to main
-
-**Status:** Plan published
-**Size estimate:** S
-**Owner:** Zeshan
-**Plan file:** [docs/plans/fc-043.md](plans/fc-043.md)
-
-**Problem / opportunity:** The backend deploy pipeline is 95% built but never wired: `cloudbuild.yaml` is a full test→build→deploy pipeline (FC-032's `npm test` gate + pinned Cloud Run flags), and a GitHub↔GCP connection (`github-connection`, region `us-central1`) already links `memon1987/ai-storybook-app` — but **there are zero Cloud Build triggers**, so merges to `main` deploy nothing. Deploys have been manual and easy to forget: verified 2026-07-08 that FC-037 (safety), FC-041 (vision moderation), FC-028 (aspect), and FC-016 instrumentation all merged to `main` but were never deployed (the live Cloud Run revision runs a pre-merge image). The child-safety gates were sitting unshipped.
-
-**Decision (published):** create one 2nd-gen Cloud Build trigger on the existing `github-connection` — branch `^main$`, build config `cloudbuild.yaml`, **path-filtered to `backend/**` + `cloudbuild.yaml`** so docs/mobile-only merges don't pointlessly rebuild+redeploy the backend. Auto-deploy straight to prod (MVP; backed by the `npm test` gate + the two-reviewer merge process). **Explicitly deferred to FC-009:** a staging environment and a manual-approval gate — auto-to-prod is accepted for the current pre-launch, low-user stage, with Cloud Run revision rollback (FC-032 runbook) as the safety net.
-
-**Relates to:** FC-032 (wrote the `cloudbuild.yaml` test gate + pinned deploy flags this trigger invokes), FC-009 (infra improvements — staging + approval gate live there), FC-024 (PR test CI, complementary — this adds the deploy half).
-
----
-
 ## Completed
+
+### FC-043: Enable GCP Cloud Build CI/CD — auto-deploy backend on merge to main — Done 2026-07-08
+
+Wired the backend deploy pipeline that was 95% built but never firing. Created one 2nd-gen Cloud Build trigger `deploy-storybook-api-on-main` on the existing `github-connection` (branch `^main$`, build config `cloudbuild.yaml`, `--included-files=backend/**,cloudbuild.yaml` so docs/mobile-only merges don't rebuild, compute SA `983903024759-compute@developer.gserviceaccount.com`). A bootstrap build (`0bada00b-db59-47e3-94a1-5ac250da4372`) against main commit `b8f0b33` went to SUCCESS (~3 min: `npm test` gate green → docker build → Cloud Run deploy), producing revision `storybook-api-00162-dfs` serving 100% traffic — which put this session's FC-037 (input/text safety), FC-041 (vision moderation), FC-028 (aspect), and FC-016 instrumentation LIVE in production for the first time (deploys had been manual and repeatedly forgotten). Backend deploys are now automatic on any `backend/**` merge to main; a staging environment and a manual-approval/promote gate were explicitly deferred to FC-009.
+
+- **Plan:** [docs/plans/fc-043.md](plans/fc-043.md)
+- **Docs commit (trigger plan):** `b8f0b33`
+
+### FC-041: Vision moderation pass on generated pages — Done 2026-07-08
+
+Added a per-page vision-moderation gate over the generated illustrations (the deferred image half of FC-037's text gate), wired between illustration generation and finalize: each title + page image is re-downloaded and classified by a multimodal `TEXT_MODEL` call, fail-closed, with any block routed through the existing `safety_blocked` path (no new `FailureCode`). Both independent adversarial reviews converged on a HIGH fail-OPEN: `downloadRef` returned null for both benign placeholders and transient GCS download failures, so an unsafe real image that flaked on download could reach a child unmoderated. Fixed via a new `isOurBucketUrl` disambiguation — a non-bucket placeholder still skips, but an our-bucket download failure now fails closed as a RESUMABLE `generation_error` (not `safety_blocked`), and a seam test pins the two cases apart. Live in prod via FC-043.
+
+- **Plan:** [docs/plans/fc-041.md](plans/fc-041.md)
+- **PR:** [#50](https://github.com/memon1987/ai-storybook-app/pull/50) (squash-merged as `23a278a`)
+
+### FC-027: Responsive layout Phase 2 — iPad / landscape polish — Done 2026-07-08
+
+Finished the iPad/tablet form-factor polish left after FC-026's critical-bug fixes: extended `useResponsive` (`scale`, `contentMaxWidth`, `deviceClass`), added a new `ResponsiveContainer` (center + max-width) for the auth/settings screens, and scaled create-wizard titles + inputs and the art-style grid (3-up phone → 4-up tablet). Two adversarial reviews both returned REQUEST_CHANGES on 2 HIGHs: the 560pt content cap was applied against live window width so it wrongly bound on phones in landscape (long-edge > cap), and the Settings title didn't scale while the auth/create titles did (cross-screen drift on iPad). Fixed: the cap is gated on `deviceClass === 'tablet'` (orientation-stable short edge) so every phone is a true no-op, all screen titles scale, and input height + font scale together. Mobile-only; reaches users on the next EAS build.
+
+- **Plan:** [docs/plans/fc-027.md](plans/fc-027.md)
+- **PR:** [#49](https://github.com/memon1987/ai-storybook-app/pull/49) (squash-merged as `090a45e`)
+
+### FC-039: iOS-style library edit mode (jiggle + delete badge) — Done 2026-07-08
+
+Replaced the undiscoverable long-press-Alert delete with the familiar iOS home-screen edit mode: long-pressing a library thumbnail enters an edit mode where every card jiggles (staggered phase) and shows a delete badge, tap-to-delete runs the existing `deleteStory` mutation behind a lightweight confirm, with light haptics on enter/delete. Adversarial review caught 2 HIGHs: the delete-badge negative offset rendered dead (clipped) on Android, and a concurrent-delete `onError` path could resurrect an already-deleted story. Fixed: badge repositioned in-bounds with no layout shift, `onError` reconciles from the live react-query cache, a stable `story.id` jiggle key, and an a11y hint. Adds the `expo-haptics` dependency (lazy-required so it degrades to no-haptics on the current build); haptics land fully only on the next EAS build.
+
+- **Plan:** [docs/plans/fc-039.md](plans/fc-039.md)
+- **PR:** [#48](https://github.com/memon1987/ai-storybook-app/pull/48) (squash-merged as `aab231e`)
+
+### FC-028: Pin backend image aspect ratio — Done 2026-07-08
+
+Shrank the reader/library letterbox bands for new stories by pinning a 16:9 landscape aspect ratio on the backend image generation. The installed `@google/genai` v0.7.0 has no `imageConfig.aspectRatio` on `GenerateContentConfig` (a config-level pin fails `tsc`), so the plan's Path B shipped: a shared prompt-level `ASPECT_RATIO_INSTRUCTION` constant. Adversarial review narrowed the pin from all four builders to the two user-visible ones only (page + title) — the char-ref/cast model sheets are internal white-background references never shown to a user, so pinning them was pure downside on the consistency-critical multi-reference pipeline — softened the wording, moved it out of the recency-privileged final prompt slot into the COMPOSITION block, and replaced the plan's one-story post-deploy check with a quantified guardrail (revert if the FC-020 text-verify pass-rate drops > 5 pts over ≥5 real stories). SDK-upgrade config-level pin filed as follow-up FC-042. Live in prod via FC-043.
+
+- **Plan:** [docs/plans/fc-028.md](plans/fc-028.md)
+- **PR:** [#47](https://github.com/memon1987/ai-storybook-app/pull/47) (squash-merged as `5439c82`)
 
 ### FC-040: Reader page-turn polish — tap-to-turn animated curl — Done 2026-07-07
 
