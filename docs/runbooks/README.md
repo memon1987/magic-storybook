@@ -26,6 +26,7 @@ If you hit a scenario without a runbook here, write one as you debug. The patter
 | 7 | [cloud-build-failed.md](cloud-build-failed.md) | Merge-to-main triggered a failed deploy |
 | 8 | [cloud-run-oom-response.md](cloud-run-oom-response.md) | `storybook-api error rate` alert fires |
 | 9 | [recreate-alerting.md](recreate-alerting.md) | Alerting policies / log-based metrics need to be recreated (DR or new project) |
+| 10 | [mobile-release-preflight.md](mobile-release-preflight.md) | **Before submitting any EAS iOS production build to TestFlight** — mandatory on-device smoke test (release-only crashes like FC-044 are dev-invisible) |
 
 Deferred (file as needs arise):
 - `gemini-api-outage.md` — Gemini-wide outage; current playbook is just "wait" + maybe pause new generates if extended.

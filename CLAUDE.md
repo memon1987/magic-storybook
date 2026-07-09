@@ -328,6 +328,16 @@ eas build --platform ios
 eas build --platform android
 ```
 
+**MANDATORY pre-submit gate (mobile):** before promoting any EAS iOS production build to
+TestFlight/testers (`eas submit -p ios`), run the on-device smoke test in
+[docs/runbooks/mobile-release-preflight.md](docs/runbooks/mobile-release-preflight.md) on a
+**physical device against the release build** — at minimum: open a story and turn pages both
+directions, then generate a story end-to-end. This is not optional: TestFlight build 14 shipped
+a reader page-turn crash (FC-044) that was **invisible in dev and passed two code reviews +
+`tsc`** because it was a release-only worklet failure. There is no mobile test runner yet
+(FC-024) to catch runtime/crash behavior, so this human gate is the backstop. Never submit a
+build you have not turned a page on.
+
 ---
 
 ## API Endpoints
