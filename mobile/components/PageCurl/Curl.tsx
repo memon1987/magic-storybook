@@ -326,36 +326,50 @@ export function Curl({
     );
   }, [currentPage, width, origin, pointer, isBackward, isAnimating, settleShared, commitBackward, busy, clearBusy]);
 
+  // JS-thread tap router. Computes the zone and navigates. Kept on the JS thread
+  // because resolveTapZone is a plain (non-worklet) function and the turn/toggle
+  // handlers already run here — see the crash note on the gesture below.
+  const handleTapAt = useCallback(
+    (x: number, y: number) => {
+      // FC-040 review fix (HIGH): the tap's y + chrome-band geometry route a tap
+      // over the (visible) ✕ or dots bar to 'none' so the underlying RN Pressable
+      // owns it and the Curl neither turns nor toggles. When controls are hidden
+      // the bands are 0/ignored and the full-height edge/center zones apply.
+      const zone = resolveTapZone(x, width, y, {
+        controlsVisible,
+        topBandHeight,
+        bottomBandHeight,
+        height,
+      });
+      if (zone === 'backward') turnBackward();
+      else if (zone === 'forward') turnForward();
+      else if (zone === 'toggle') onTap();
+      // zone === 'none': chrome band — do nothing; the Pressable handles it.
+    },
+    [width, height, controlsVisible, topBandHeight, bottomBandHeight, turnForward, turnBackward, onTap]
+  );
+
   // FC-040: single Tap gesture routes by horizontal position. No Pan gesture —
   // the finger-tracked drag curl was removed. Zones: left 20% back / center 60%
   // toggle bars / right 20% forward (see tapZones.ts). Taps during an in-flight
   // animation are dropped by the isAnimating guard inside turnForward/Backward.
+  //
+  // CRASH HOTFIX: react-native-gesture-handler runs `.onEnd` as a WORKLET on the
+  // UI thread. `resolveTapZone` is a plain JS function, and calling a non-worklet
+  // from a worklet is a fatal crash in release builds (Hermes + Reanimated worklet
+  // runtime) — it only "worked" in dev because dev mode is lenient. So the worklet
+  // does nothing but hop to the JS thread via runOnJS; the zone computation and
+  // navigation happen there (turnForward/Backward/onTap already ran on the JS
+  // thread via runOnJS before, so behavior is unchanged).
   const tap = useMemo(
     () =>
       Gesture.Tap()
         .maxDistance(8)
         .onEnd((e) => {
-          // FC-040 review fix (HIGH): pass the tap's y + the chrome-band geometry
-          // so a tap that lands over the (visible) ✕ or dots bar routes to 'none'
-          // — the underlying RN Pressable owns it and the Curl neither turns nor
-          // toggles. When controls are hidden the bands are 0/ignored and the
-          // full-height edge/center zones apply as before.
-          const zone = resolveTapZone(e.x, width, e.y, {
-            controlsVisible,
-            topBandHeight,
-            bottomBandHeight,
-            height,
-          });
-          if (zone === 'backward') {
-            runOnJS(turnBackward)();
-          } else if (zone === 'forward') {
-            runOnJS(turnForward)();
-          } else if (zone === 'toggle') {
-            runOnJS(onTap)();
-          }
-          // zone === 'none': chrome band — do nothing; the Pressable handles it.
+          'worklet';
+          runOnJS(handleTapAt)(e.x, e.y);
         }),
-    [width, height, controlsVisible, topBandHeight, bottomBandHeight, turnForward, turnBackward, onTap]
+    [handleTapAt]
   );
 
   // Forward: current curls away, next revealed beneath. Backward: previous curls
