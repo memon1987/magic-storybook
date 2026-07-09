@@ -1,4 +1,4 @@
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { View, PixelRatio, StyleSheet } from 'react-native';
 import {
   Canvas,
@@ -54,9 +54,9 @@ interface CurlProps {
 }
 
 const CORNER_RADIUS = 0;
-// FC-040: one shared self-running curl duration for both directions. Tuned on
-// device (450–600 window per the plan).
-const TURN_MS = 500;
+// FC-040: one shared self-running curl duration for both directions. Slowed from
+// 500ms → 750ms per user feedback (build 15 felt too fast for a bedtime reader).
+const TURN_MS = 750;
 
 // FC-026: every page is drawn fit="contain" so no baked-in narration text is
 // ever cropped on any device/orientation. The resulting letterbox margins are
@@ -167,6 +167,23 @@ export function Curl({
   nextImageRef.current = nextImage;
   const previousImageRef = useRef(previousImage);
   previousImageRef.current = previousImage;
+  const currentImageRef = useRef(currentImage);
+  currentImageRef.current = currentImage;
+
+  // FC-040 post-turn flash fix. Skia's useImage keeps returning the STALE
+  // previous image while it async-re-decodes a changed URL (see usePageImages:
+  // `current`/`next`/`prev` are independent useImage hooks, so after a commit the
+  // `current` slot re-fetches instead of inheriting the already-decoded `next`).
+  // So `currentImage` still points at the page we turned AWAY from for a few
+  // frames after commit. If the settle layer is removed on the curl-reset alone,
+  // the un-hidden flat layer draws that stale previous page → a brief flash.
+  // We capture the image being left at turn start and hold the settle layer (it
+  // shows the correct target page) until `currentImage` moves off it.
+  const leavingImageRef = useRef<SkImage | null>(null);
+  // Set true by the UI-thread reaction once the curl values have reset; consumed
+  // by the image-gated clear effect below (which also waits for the fresh image).
+  const [curlReset, setCurlReset] = useState(false);
+  const onCurlReset = useCallback(() => setCurlReset(true), []);
 
   useLayoutEffect(() => {
     // Canonical rest after any commit / resize: flat current page, forward mode.
@@ -196,6 +213,7 @@ export function Curl({
   const finishSettle = useCallback(() => {
     setSettling(false);
     setSettleImage(null);
+    setCurlReset(false);
   }, []);
 
   // FC-040 review fix (HIGH): clear the JS-thread busy latch from the animation's
@@ -212,11 +230,35 @@ export function Curl({
       if (ready && !prev) {
         settleShared.value = false;
         settleClearReady.value = false;
-        runOnJS(finishSettle)();
+        // Signal that the curl values have reset on the UI thread. We do NOT
+        // clear the settle layer here — the image-gated effect below waits for
+        // the freshly-committed page to actually be decoded first, else the live
+        // layer would flash the stale previous page (see leavingImageRef).
+        runOnJS(onCurlReset)();
       }
     },
     []
   );
+
+  // FC-040 flash fix: clear the settle gate only once BOTH (a) the curl values
+  // have reset (curlReset, from the reaction above) AND (b) the newly-committed
+  // page image is live — i.e. `currentImage` has changed off the page we left.
+  // Until then the settle layer keeps showing the correct target page.
+  useEffect(() => {
+    if (!settling || !curlReset) return;
+    if (currentImage === leavingImageRef.current) return; // fresh page not decoded yet
+    finishSettle();
+  }, [settling, curlReset, currentImage, finishSettle]);
+
+  // Safety backstop: never hold the settle layer indefinitely — e.g. if the new
+  // page's image URL fails to load, `currentImage` never refreshes. Release after
+  // a bounded wait so subsequent taps keep working; the settle layer shows the
+  // target page meanwhile, so the worst case degrades to the original brief flash.
+  useEffect(() => {
+    if (!settling) return;
+    const t = setTimeout(finishSettle, TURN_MS + 500);
+    return () => clearTimeout(t);
+  }, [settling, finishSettle]);
 
   // JS-thread commit: freeze the target page as the settle image + hide the
   // live layers + advance the page — all in one React commit so the frozen
@@ -271,6 +313,9 @@ export function Curl({
     // This boundary guard is what guarantees the target page differs — enter the
     // animation (and the gate) only when there is a real page to turn to.
     if (currentPage >= totalPages - 1) return;
+    // Record the page we're leaving so the settle gate can wait for the new page
+    // to actually decode before un-hiding the live layers (flash fix).
+    leavingImageRef.current = currentImageRef.current;
     busy.current = true;
     isAnimating.value = true;
     isBackward.value = false;
@@ -304,6 +349,8 @@ export function Curl({
     // differs, so the commit always changes currentPage and the settle gate's
     // useLayoutEffect re-runs to clear it — the gate can't wedge.
     if (currentPage <= 0) return;
+    // Record the page we're leaving (flash fix — see turnForward + leavingImageRef).
+    leavingImageRef.current = currentImageRef.current;
     busy.current = true;
     isAnimating.value = true;
     isBackward.value = true;
