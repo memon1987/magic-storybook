@@ -179,7 +179,11 @@ export function Curl({
   // the un-hidden flat layer draws that stale previous page → a brief flash.
   // We capture the image being left at turn start and hold the settle layer (it
   // shows the correct target page) until `currentImage` moves off it.
-  const leavingImageRef = useRef<SkImage | null>(null);
+  // The image the reader was showing when the CURRENT settle cycle committed
+  // (i.e. the page being left). Captured per-cycle as state at commit time — NOT
+  // a shared ref — so overlapping settle cycles from rapid taps can't clobber
+  // each other's leaving image and clear the gate one turn early.
+  const [settleLeavingImage, setSettleLeavingImage] = useState<SkImage | null>(null);
   // Set true by the UI-thread reaction once the curl values have reset; consumed
   // by the image-gated clear effect below (which also waits for the fresh image).
   const [curlReset, setCurlReset] = useState(false);
@@ -213,6 +217,7 @@ export function Curl({
   const finishSettle = useCallback(() => {
     setSettling(false);
     setSettleImage(null);
+    setSettleLeavingImage(null);
     setCurlReset(false);
   }, []);
 
@@ -233,7 +238,7 @@ export function Curl({
         // Signal that the curl values have reset on the UI thread. We do NOT
         // clear the settle layer here — the image-gated effect below waits for
         // the freshly-committed page to actually be decoded first, else the live
-        // layer would flash the stale previous page (see leavingImageRef).
+        // layer would flash the stale previous page (see settleLeavingImage).
         runOnJS(onCurlReset)();
       }
     },
@@ -246,9 +251,9 @@ export function Curl({
   // Until then the settle layer keeps showing the correct target page.
   useEffect(() => {
     if (!settling || !curlReset) return;
-    if (currentImage === leavingImageRef.current) return; // fresh page not decoded yet
+    if (currentImage === settleLeavingImage) return; // fresh page not decoded yet
     finishSettle();
-  }, [settling, curlReset, currentImage, finishSettle]);
+  }, [settling, curlReset, currentImage, settleLeavingImage, finishSettle]);
 
   // Safety backstop: never hold the settle layer indefinitely — e.g. if the new
   // page's image URL fails to load, `currentImage` never refreshes. Release after
@@ -280,6 +285,9 @@ export function Curl({
       return;
     }
     setSettleImage(nextImageRef.current);
+    // Capture the page we're leaving for THIS cycle (currentImageRef is still the
+    // pre-advance page here — onPageChange hasn't re-rendered yet).
+    setSettleLeavingImage(currentImageRef.current);
     setSettling(true);
     onPageChange(target);
   }, [currentPage, totalPages, onPageChange, settleShared, busy, isAnimating]);
@@ -296,6 +304,7 @@ export function Curl({
       return;
     }
     setSettleImage(previousImageRef.current);
+    setSettleLeavingImage(currentImageRef.current);
     setSettling(true);
     onPageChange(target);
   }, [currentPage, onPageChange, settleShared, busy, isAnimating]);
@@ -313,9 +322,6 @@ export function Curl({
     // This boundary guard is what guarantees the target page differs — enter the
     // animation (and the gate) only when there is a real page to turn to.
     if (currentPage >= totalPages - 1) return;
-    // Record the page we're leaving so the settle gate can wait for the new page
-    // to actually decode before un-hiding the live layers (flash fix).
-    leavingImageRef.current = currentImageRef.current;
     busy.current = true;
     isAnimating.value = true;
     isBackward.value = false;
@@ -349,8 +355,6 @@ export function Curl({
     // differs, so the commit always changes currentPage and the settle gate's
     // useLayoutEffect re-runs to clear it — the gate can't wedge.
     if (currentPage <= 0) return;
-    // Record the page we're leaving (flash fix — see turnForward + leavingImageRef).
-    leavingImageRef.current = currentImageRef.current;
     busy.current = true;
     isAnimating.value = true;
     isBackward.value = true;
@@ -514,9 +518,17 @@ export function Curl({
               so no partially-peeled/stale frame leaks through. It is the same
               decoded SkImage the flat curl layer shows after the reset, so the
               handoff is pixel-identical. */}
-          {settling && settleImage && (
-            <SkiaImage image={settleImage} rect={imageRect} fit="contain" />
-          )}
+          {settling &&
+            (settleImage ? (
+              <SkiaImage image={settleImage} rect={imageRect} fit="contain" />
+            ) : (
+              // Turning TO a null-image page (e.g. the synthetic "The End"): paint
+              // black over the stale ambient backdrop so the previous page doesn't
+              // show through during the settle window. The end state is a black
+              // page anyway, so this just makes the handoff clean instead of
+              // briefly revealing the old page's blurred backdrop.
+              <Rect x={0} y={0} width={width} height={height} color="black" />
+            ))}
         </Canvas>
       </View>
     </GestureDetector>
