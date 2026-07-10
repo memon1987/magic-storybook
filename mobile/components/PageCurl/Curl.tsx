@@ -428,6 +428,17 @@ export function Curl({
   const curlImage = direction === 'backward' ? previousImage : currentImage;
   const revealImage = direction === 'backward' ? currentImage : nextImage;
 
+  // FC-040 flash fix (build 17): drive the ambient backdrop (the blurred bed that
+  // fills the letterbox bands) from the committed target page WHILE settling, not
+  // from `currentImage`. `currentImage` lags — Skia's useImage keeps the stale
+  // previous page until the new URL re-decodes — so the backdrop otherwise
+  // updated LATE (at settle-clear, after the center already showed the new page),
+  // making the blurred margins snap a beat after the page arrived. Using
+  // `settleImage` during settle updates the margins IN SYNC with the center (both
+  // at commit), so there is no late peripheral flash. Once settle clears,
+  // `currentImage` has caught up to the same page, so the source swaps seamlessly.
+  const backdropImage = settling && settleImage ? settleImage : currentImage;
+
   const uniforms = useDerivedValue(
     () => ({
       pointer: pointer.value * pd,
@@ -475,8 +486,8 @@ export function Curl({
 
           {/* Ambient backdrop fills the contain letterbox margins for the whole
               reader. Based on the current page; updates on commit. */}
-          {currentImage && (
-            <AmbientBackdrop image={currentImage} rect={imageRect} width={width} height={height} />
+          {backdropImage && (
+            <AmbientBackdrop image={backdropImage} rect={imageRect} width={width} height={height} />
           )}
 
           {/* Sharp page revealed beneath the curl (forward: next, backward:
