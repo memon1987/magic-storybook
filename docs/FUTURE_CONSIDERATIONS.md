@@ -266,6 +266,37 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 **Relates to:** FC-028 (this is its required SDK-upgrade follow-up), FC-026/FC-038 (mobile contain/backdrop already handles ratio mismatch — this only shrinks letterbox bands for new stories).
 
+**Update 2026-11-09 (from FC-045 research):** the gap has widened — installed is still 0.7.0, latest is **3.0.0**. Two more reasons to do this now exist: (1) the current image model (`gemini-nano-banana-2.1`) defaults to `medium` thinking, which is billed and slower, and 0.7.0's `ThinkingConfig` cannot send `thinkingLevel`; (2) Google's docs now show image generation only through the Interactions API (`generateContent` "remains fully supported", but it is called "legacy"). Scope the upgrade to cover `thinkingLevel`, `imageConfig.aspectRatio`, and a decision on Interactions vs `generateContent`.
+
+### FC-045: Gemini model refresh — move text + image generation off preview model IDs
+
+**Status:** Plan published
+**Size estimate:** M
+**Owner:** Zeshan (executing via Claude, 2026-11-09)
+**Plan file:** [docs/plans/fc-045.md](plans/fc-045.md)
+
+**Problem / opportunity:** the backend pins two preview model IDs. `gemini-3.1-flash-image-preview` is past its listed earliest shutdown date (2026-06-25) and is no longer on Google's models page; `gemini-3-flash-preview` has no shutdown date but previews get ~2 weeks' notice. The TestFlight beta is being renewed (build 18) and its preflight generates a real story, so the backend has to be on supported models first.
+
+**Approach (see plan):** `IMAGE_MODEL` → `gemini-nano-banana-2.1`, `TEXT_MODEL` → `gemini-3.8-flash`; a pure helper that skips interim "thinking" images so a draft is never stored; a test that bans preview / alias model IDs. No SDK upgrade (FC-042). Merge is gated on a live verification run.
+
+**Open questions:**
+- Blocking: Gemini prepaid credits are depleted (HTTP 402) — live verification cannot run until topped up.
+
+### FC-046: Detect a silent generation outage (credit depletion, retired model ID)
+
+**Status:** Consideration
+**Size estimate:** S-M
+**Owner:** unassigned
+**Filed by:** FC-045 (found while probing)
+
+**Problem / opportunity:** on 2026-11-09 every Gemini call from the production key returned `402 Payment Required — "Your prepayment credits are depleted"`. Nothing alerted. There were no generation log lines inside the log-retention window, so it is unknown how long generation had been down. A retired model ID would fail the same silent way. The FC-032 alert policies watch 5xx rates and Cloud Build failures; with no traffic there is nothing for them to fire on.
+
+**Idea:** a scheduled canary (Cloud Scheduler → an authenticated admin route) that makes one cheap text call and one `models.list` check that the pinned model IDs are still served, emits a structured log line, and a log-based alert on canary failure. Also consider mapping `402` / "credits are depleted" to its own `FailureCode` so the mobile app can say something more useful than a generic generation error.
+
+**Open questions:**
+- Is prepaid billing the right mode for a product with real users, or should the key move to postpaid / a budget alert?
+- Should the canary also generate one image (a few cents per run) or is the text call plus `models.list` enough?
+
 ---
 
 ## Completed
