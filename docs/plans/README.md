@@ -27,6 +27,6 @@ _Active (not-yet-Done) plans. Completed plans are indexed in the "Completed" sec
 All plans below (except fc-016, which has human decision gates) carry an `## Execution contract` and execute per [AUTONOMOUS_EXECUTION.md](AUTONOMOUS_EXECUTION.md) — isolated worktree/branch, goal-loop to green, two independent adversarial reviews + confirmation, stop at ready-to-merge.
 
 - [fc-016.md](fc-016.md) — FC-016: Story generation latency reduction, status: Executing (Phase 1 merged; on hold 2026-07-08 pending production latency data; Phases 2–4 pending; partial-autonomy contract)
-- [fc-045.md](fc-045.md) — FC-045: Gemini model refresh (off preview model IDs), status: Executing (PR #54 open 2026-11-09; merge gated on live verification, which is blocked on depleted Gemini credits)
+- [fc-045.md](fc-045.md) — FC-045: Gemini image model refresh (off the retired preview ID; text model deferred to FC-047), status: Executing (PR #54 open 2026-11-09; merge gated on live verification, which is blocked on depleted Gemini credits)
 
 _Done (indexed in the [Completed](../FUTURE_CONSIDERATIONS.md#completed) section): FC-024, FC-036, FC-037, FC-038, FC-040 (merged 2026-07-07); FC-027, FC-028, FC-039, FC-041, FC-043 (merged 2026-07-08)._

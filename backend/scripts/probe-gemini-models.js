@@ -13,17 +13,24 @@
  *   text    story-JSON call per text candidate (prod shape: safetySettings only).
  *   image   baked-text page per image candidate (prod shape: IMAGE modality +
  *           safetySettings). Reports EVERY response part incl. the `thought`
- *           flag, because prod keeps the FIRST inlineData part it sees.
+ *           flag: production keeps the last NON-thought image
+ *           (extractGeneratedImage), so the layout matters.
  *   ref     same, with a reference image in `contents` (prod multimodal shape).
  *   vision  text model + inline image (FC-041 vision-moderation shape).
  *   rest    raw REST with thinkingLevel / imageConfig — fields the installed SDK
  *           may silently drop; shows what an SDK upgrade would unlock.
  *
- * Usage (key is read from the environment and never printed):
- *   GEMINI_API_KEY=... node probe-gemini-models.js --backend <path/to/backend> \
- *       --out <dir> [--phases list,text,image,ref,vision,rest]
+ * Only `list` is free; every other phase makes paid calls. This probe builds
+ * its own requests on purpose (it tests call SHAPES per model). To verify the
+ * real pipeline end to end, use scripts/live-verify-models.js instead.
+ *
+ * Usage, from backend/ (key is read from the environment and never printed):
+ *   GEMINI_API_KEY=... node scripts/probe-gemini-models.js [--phases list,text,image,ref,vision,rest] [--out <dir>]
+ * Images are written to --out (default: a folder under the OS temp dir, so
+ * nothing lands inside backend/, which is the deploy trigger's path filter).
  */
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { createRequire } = require('module');
 
@@ -33,7 +40,7 @@ const arg = (name, dflt) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : dflt;
 };
 const BACKEND = path.resolve(arg('backend', process.cwd()));
-const OUT = path.resolve(arg('out', path.join(process.cwd(), 'probe-out')));
+const OUT = path.resolve(arg('out', path.join(os.tmpdir(), `probe-gemini-models-${Date.now()}`)));
 const PHASES = new Set(arg('phases', 'list').split(','));
 const KEY = process.env.GEMINI_API_KEY;
 if (!KEY) { console.error('GEMINI_API_KEY is not set'); process.exit(1); }
