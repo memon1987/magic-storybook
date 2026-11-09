@@ -198,7 +198,7 @@ async function phaseImage() {
     const d = describeParts(r.value, `image-${model}`);
     imageResults.set(model, d);
     const sameAsProd = d.firstImage && d.lastNonThoughtImage && d.firstImage.idx === d.lastNonThoughtImage.idx;
-    console.log(`${d.firstImage ? 'OK  ' : 'NOIMG'} ${model} (${r.ms}ms): parts=${d.partCount}; prod-would-keep=part${d.firstImage?.idx ?? '-'}; final=part${d.lastNonThoughtImage?.idx ?? '-'}; firstIsFinal=${!!sameAsProd}; blockReason=${r.value.promptFeedback?.blockReason || 'none'}; ${usageLine(r.value)}`);
+    console.log(`${d.firstImage ? 'OK  ' : 'NOIMG'} ${model} (${r.ms}ms): parts=${d.partCount}; firstImage=part${d.firstImage?.idx ?? '-'}; finalImage(prod keeps this)=part${d.lastNonThoughtImage?.idx ?? '-'}; firstIsFinal=${!!sameAsProd}; blockReason=${r.value.promptFeedback?.blockReason || 'none'}; ${usageLine(r.value)}`);
     d.rows.forEach((row) => console.log(`       ${row}`));
   }
 }

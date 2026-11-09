@@ -447,11 +447,13 @@ gcloud run services logs read storybook-api --region us-central1 --limit 50
 
 ### 1. Image Generation Response Format
 
-`gemini-nano-banana-2.1` returns images as `inlineData` parts in `candidates[0].content.parts`:
+Image responses are read as `inlineData` parts in `candidates[0].content.parts`. This is the shape
+the previous image model returned and the shape the code expects; it is **not yet observed** on
+`gemini-nano-banana-2.1` (FC-045 live verification asserts it, including PNG/JPEG):
 ```typescript
 part.inlineData = {
   data: string;      // Base64 encoded image
-  mimeType: string;  // 'image/png' or 'image/jpeg'
+  mimeType: string;  // expected 'image/png' or 'image/jpeg' — the pipeline assumes one of these
 }
 part.thought?: boolean; // may be true on interim "thinking" draft images — skipped if present
 ```

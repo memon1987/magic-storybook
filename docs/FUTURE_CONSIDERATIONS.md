@@ -318,6 +318,7 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 - Candidate notes from FC-045 research: `gemini-3.8-flash` defaults to `medium` thinking (the current preview defaults to `high`), rejects `minimal`, and "can use more tokens by design"; `gemini-3.6-flash` is the same list price and supports `minimal`. SDK 0.7.0 cannot set the level (FC-042).
 - Use structured output (`responseMimeType` / `responseSchema`, available on SDK 0.7.0) for the classifiers; today `"Safe"` / `"SAFE"` or prose with braces before the JSON blocks a story.
 - Decide whether classifier 503 / 429 should be retried before failing closed (today each becomes `safety_blocked`, which is non-resumable in the app).
+- Verify, with deliberately unsafe image prompts, whether Google's image endpoint honors our `safetySettings` at all, and how a block is reported (`promptFeedback`, `finishReason`, HTTP error). Until that is known the vision gate must be treated as the only image guard.
 
 ### FC-048: Safety-pipeline gaps found in the FC-045 review
 
