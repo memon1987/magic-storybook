@@ -10,7 +10,7 @@ An iOS mobile app that generates personalized, AI-powered storybooks for childre
 - **Storage**: GCP Cloud Storage
 - **Auth**: Firebase Authentication
 - **AI**: Google Gemini API
-  - `gemini-3.8-flash` for story text and content moderation
+  - `gemini-3-flash-preview` for story text and content moderation (deliberately still preview; see FC-047)
   - `gemini-nano-banana-2.1` (Nano Banana 2.1) for illustrations
 
 ## Project Structure

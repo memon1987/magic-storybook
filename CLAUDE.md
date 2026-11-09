@@ -65,7 +65,7 @@ After implementation is complete, update the plan file:
 - **Storage**: Google Cloud Storage (for illustration images)
 - **Auth**: Firebase Authentication (email/password)
 - **AI Models**:
-  - Text Generation (story text + both moderation classifiers): `gemini-3.8-flash`
+  - Text Generation (story text + both moderation classifiers): `gemini-3-flash-preview` (deliberately still preview — FC-047)
   - Image Generation: `gemini-nano-banana-2.1` ("Nano Banana 2.1"; latency / text-accuracy: see `docs/plans/fc-045.md` Execution)
 
 ---
@@ -81,7 +81,7 @@ ai_storybook_app/
 │   │   │   ├── auth.ts        # POST /api/auth/register, /api/auth/login
 │   │   │   └── stories.ts     # POST /api/stories/generate, GET /api/stories, GET /api/stories/:id
 │   │   ├── services/
-│   │   │   ├── gemini.ts      # AI generation (gemini-3.8-flash text, gemini-nano-banana-2.1 images)
+│   │   │   ├── gemini.ts      # AI generation (gemini-3-flash-preview text, gemini-nano-banana-2.1 images)
 │   │   │   └── firebase.ts    # Firebase Admin SDK init
 │   │   ├── middleware/
 │   │   │   └── auth.ts        # Firebase ID token verification
@@ -171,11 +171,14 @@ Defined in:
 ### Current Models (in `backend/src/services/gemini.ts`)
 
 ```typescript
-const TEXT_MODEL = 'gemini-3.8-flash';         // Story text + text/vision moderation classifiers
+const TEXT_MODEL = 'gemini-3-flash-preview';   // Story text + text/vision moderation classifiers (deliberately preview — FC-047)
 const IMAGE_MODEL = 'gemini-nano-banana-2.1';   // Image generation (figures: docs/plans/fc-045.md Execution)
 ```
 
-GA model IDs only (FC-045) — `gemini-models.test.ts` fails if a `preview` / `exp` / `latest` ID is pinned.
+The image model moved to a GA ID in FC-045. `TEXT_MODEL` **deliberately** stays on a preview ID:
+it also runs both fail-closed safety classifiers, so moving it needs the labelled safety
+evaluation in FC-047. `gemini-models.test.ts` fails if any *new* `preview` / `exp` /
+`experimental` / `latest` ID is pinned (only `gemini-3-flash-preview` is allow-listed).
 
 ### Image Generation Pattern
 
@@ -200,8 +203,9 @@ const buffer = Buffer.from(image.data, 'base64');
 // Upload to Cloud Storage with image.mimeType...
 ```
 
-`extractGeneratedImage` skips parts with `thought: true` (interim "thinking" draft images) and
-returns the **last** non-thought image part; it never falls back to a draft.
+The response *may* include interim "thinking" draft images flagged `thought: true` (not yet
+observed on this model). If present, `extractGeneratedImage` skips them; it returns the **last**
+non-thought image part and never falls back to a draft.
 
 ### Retry Logic
 
@@ -403,7 +407,7 @@ kill -9 <PID>  # Or use existing server
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Story text generation | ✅ Complete | `gemini-3.8-flash` |
+| Story text generation | ✅ Complete | `gemini-3-flash-preview` (FC-047) |
 | Image generation | ✅ Complete | `gemini-nano-banana-2.1` |
 | Text in images | ✅ Complete | Dr. Seuss/Pout-Pout style |
 | 6 art styles | ✅ Complete | All working |
@@ -449,9 +453,10 @@ part.inlineData = {
   data: string;      // Base64 encoded image
   mimeType: string;  // 'image/png' or 'image/jpeg'
 }
-part.thought?: boolean; // true on interim "thinking" draft images — skipped
+part.thought?: boolean; // may be true on interim "thinking" draft images — skipped if present
 ```
-The final image is the last part without `thought: true` (see `extractGeneratedImage`).
+Whether this model returns thought parts via `generateContent` has not been observed yet. Either
+way, the final image is taken as the last part without `thought: true` (see `extractGeneratedImage`).
 
 ### 2. Text Embedding in Images
 
@@ -475,7 +480,7 @@ req.user = { uid: decodedToken.uid, email: decodedToken.email };
 ### 4. Story Generation Flow
 
 1. User submits form → `POST /api/stories/generate`
-2. Backend generates story text with `gemini-3.8-flash`
+2. Backend generates story text with `gemini-3-flash-preview`
 3. For each page, generates illustration with `gemini-nano-banana-2.1`
 4. Images uploaded to Cloud Storage
 5. Story document saved to Firestore
