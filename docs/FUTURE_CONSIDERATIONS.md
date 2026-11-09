@@ -270,20 +270,6 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 **Update 2026-11-09 (from FC-045 review):** review A's staged alternative is recorded here — if `gemini-nano-banana-2.1` at its default `medium` thinking proves too slow or costly, the fix is this FC (SDK upgrade, or direct REST for the four image calls) to send `thinkingLevel: minimal` and a config-level 16:9, rather than another model swap. FC-045 kept `gemini-3.1-flash-image` (GA build of the previous model, `minimal` thinking, deprecated 2026-10-06 with no shutdown date) as its fallback.
 
-### FC-045: Gemini image model refresh — off the retired preview model ID
-
-**Status:** Executing (PR #54 open; merge gated on live verification)
-**Size estimate:** M
-**Owner:** Zeshan (executing via Claude, 2026-11-09)
-**Plan file:** [docs/plans/fc-045.md](plans/fc-045.md)
-
-**Problem / opportunity:** the backend's image model, `gemini-3.1-flash-image-preview`, is past its listed earliest shutdown date (2026-06-25) and is no longer on Google's models page. The TestFlight beta is being renewed (build 18) and its preflight generates a real story, so the backend has to be on a supported image model first.
-
-**Approach (see plan):** `IMAGE_MODEL` → `gemini-nano-banana-2.1` (fallback `gemini-3.1-flash-image`, decided by live verification); a pure helper that skips interim "thinking" images so a draft is never stored; additive per-call telemetry (served model, finish reason, tokens); tests that ban new preview / alias model IDs and assert the safety settings on every call. No SDK upgrade (FC-042). **The text model is deliberately not changed** — it also runs both safety classifiers (FC-047). Scope was narrowed from "both models" after two adversarial reviews.
-
-**Open questions:**
-- Blocking: Gemini prepaid credits are depleted (HTTP 402) — live verification cannot run until topped up.
-
 ### FC-046: Detect a silent generation outage (credit depletion, retired or rerouted model ID)
 
 **Status:** Consideration
@@ -353,7 +339,7 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 - **Google's terms prohibit Gemini in apps "directed towards or likely to be accessed by individuals under the age of 18" — on the Gemini API and on Vertex AI alike** (Cloud terms §20(d)). Moving to Vertex does not cure it. The AI provider is therefore an open decision gated on legal review (Track B0).
 
 **Tracks (each becomes its own plan + PR):**
-- **A. Billing isolation (S):** dedicated billing account for `ai-storybook-app-2025`; auto-reload with a monthly cap (if the Developer API stays); alerts-only budget + Gemini **spend-cap budget** + a low Pub/Sub "panic" budget; BigQuery billing export in the storybook project; labels, project lien, second Owner. Fix: local ADC quota project points at the options-wheel project.
+- **A. Billing isolation + deploy pipeline (S):** **first, re-authorize the Cloud Build GitHub connection for the renamed repo `memon1987/magic-storybook` and repoint trigger `deploy-storybook-api`** — the rename silently broke auto-deploy (found at the FC-045 merge; manual `gcloud builds submit` is the workaround, see docs/plans/fc-045.md Execution). Then: dedicated billing account for `ai-storybook-app-2025`; auto-reload with a monthly cap (if the Developer API stays); alerts-only budget + Gemini **spend-cap budget** + a low Pub/Sub "panic" budget; BigQuery billing export in the storybook project; labels, project lien, second Owner. Fix: local ADC quota project points at the options-wheel project.
 - **B0. Legal gate (blocking for broad release):** counsel's determination on Google's under-18 clause and on COPPA "directed to children"; written answer from Google; read OpenAI's under-18 API guidance and one other provider's terms.
 - **B. Inference platform (M):** if Google is viable → **Vertex AI** (same prices, postpaid, 99.5 % SLA, IAM instead of a key, Flex −50 %, spend caps) bundled with the SDK upgrade (FC-042); if not → OpenAI gpt-image-2 (1.6× price, minors framework) for images and a text-model move. Either way: a small provider interface around the image step, Developer API kept as fallback.
 - **C. Cost per story (M):** target **$0.35–0.40 interactive medium story** (from ≈ $0.75): NB 2.1 (FC-045), `thinkingLevel: minimal` (FC-042), cast-lineup-only references (bake-off), per-user character-sheet reuse, reference ordering for implicit caching; optional **batch tier ≈ $0.20**. Decision needed on revisiting baked-in text (L11: ≈ $0.10–0.25 but reverses FC-019/020). Validated against 123 production stories (10.8 images per full story).
@@ -373,6 +359,14 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 ---
 
 ## Completed
+
+
+### FC-045: Gemini image model refresh — off the retired preview model ID — Done 2026-11-09
+
+Moved `IMAGE_MODEL` from `gemini-3.1-flash-image-preview` (past its listed shutdown date) to the GA `gemini-nano-banana-2.1`; `TEXT_MODEL` deliberately unchanged (it runs both fail-closed safety classifiers → FC-047). Added a pure `extractGeneratedImage` that skips interim "thinking" images (last non-thought image wins), additive per-call telemetry (`modelVersion`, `finishReason`, `blockReason`, token counts), tests that ban new preview/alias model IDs and assert the strict safety settings on all seven Gemini calls, and dev-only probe + live-verification scripts. Corrected the Cloud Run rollback runbook (traffic pin → `--to-latest`). Two adversarial reviews (both REQUEST_CHANGES, no code defect — scope narrowed from "both models" to image-only by owner decision) + two confirmation passes (the first caught the verification script inheriting production's OCR fail-open). Live verification: two real-pipeline stories in two art styles, 13/13 gates each — 12/12 pages passed OCR first try, all 1376×768 JPEG, ~108 s image pipeline, safety gates clean, **measured $0.68–0.71 per medium story** (image output bills ~1,540–1,800 tokens per 16:9 image, so the saving vs Nano Banana 2 is ~10–15 %, not 50 %; feeds FC-049). Found and filed on the way: the depleted-prepaid-credit outage (FC-046), classifier-eval gap (FC-047), safety-pipeline gaps (FC-048), production-readiness epic (FC-049), and the GitHub-rename-broke-the-deploy-trigger problem (deployed manually via `gcloud builds submit`).
+
+- **Plan:** [docs/plans/fc-045.md](plans/fc-045.md)
+- **PR:** [#54](https://github.com/memon1987/magic-storybook/pull/54) (squash-merged as `8acf528`; deployed as revision `storybook-api-00164-8bc`)
 
 ### FC-044: Reader page-turn crash hotfix (non-worklet called inside a UI-thread worklet) — Done 2026-07-09
 
