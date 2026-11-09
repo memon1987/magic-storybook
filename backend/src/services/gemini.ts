@@ -42,6 +42,7 @@ import {
   progressMessage,
 } from './jobState';
 import { downloadRef } from './gcsDownload';
+import { extractGeneratedImage } from './imageResponse';
 
 // Initialize Gemini client
 const ai = new GoogleGenAI({
@@ -80,14 +81,16 @@ async function scoreBakedText(imageBase64: string, intendedText: string): Promis
   }
 }
 
-// Model constants
-// Text: gemini-3-flash-preview
-// Images: gemini-3.1-flash-image-preview ("Nano Banana 2", launched 2026-02-26).
-//   ~90% text accuracy (vs ~94% on gemini-3-pro-image-preview) in exchange for
-//   4-6s per image (vs 24-35s) and ~50% lower cost ($0.067 vs $0.13 per 1K image).
-//   User override of FC-002; full benchmark plan deferred.
-const TEXT_MODEL = 'gemini-3-flash-preview';
-const IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
+// Model constants (FC-045: GA model IDs only).
+// Preview IDs get short-notice shutdowns; the previous image preview ID was
+// already past its listed shutdown date. TEXT_MODEL serves story text AND both
+// fail-closed moderation classifiers; IMAGE_MODEL serves every image call.
+// The image model's thinking level is not controllable on @google/genai 0.7.0
+// (no thinkingLevel in ThinkingConfig) — see FC-042 for the SDK upgrade.
+// Interim thought images are filtered out by extractGeneratedImage.
+// Measured latency / text-fidelity numbers: docs/plans/fc-045.md, Execution.
+const TEXT_MODEL = 'gemini-3.8-flash';
+const IMAGE_MODEL = 'gemini-nano-banana-2.1';
 
 // FC-037 layer 2: explicit, strict safety settings on EVERY Gemini call —
 // never rely on model defaults for a children's product. Applied to all five
@@ -133,7 +136,7 @@ function jitteredBackoffMs(attempt: number): number {
 }
 
 /**
- * Generate a story using Gemini Pro
+ * Generate a story using TEXT_MODEL
  *
  * `storyId` is optional so test callers can omit it; production callers
  * (the route handler) pass it so the FC-016 / FC-017 instrumentation log
@@ -142,7 +145,7 @@ function jitteredBackoffMs(attempt: number): number {
 export async function generateStory(input: StoryInput, storyId: string = 'unknown'): Promise<GeneratedStory> {
   const prompt = buildStoryPrompt(input);
 
-  console.log(`${storyTag(storyId)} Generating story with Gemini Pro...`);
+  console.log(`${storyTag(storyId)} Generating story with ${TEXT_MODEL}...`);
   const startTime = Date.now();
 
   let response: Awaited<ReturnType<typeof ai.models.generateContent>> | null = null;
@@ -438,23 +441,15 @@ export async function generateIllustration(
           }),
         );
         console.log(`${tag} generated in ${Date.now() - startTime}ms (attempt ${attempt})`);
-        const parts = response.candidates?.[0]?.content?.parts || [];
-        let imageData: string | null = null;
-        let mimeType = 'image/png';
-        for (const part of parts) {
-          if (part.inlineData?.data) {
-            imageData = part.inlineData.data;
-            mimeType = part.inlineData.mimeType || 'image/png';
-            break;
-          }
-        }
-        if (!imageData) {
+        // FC-045: last non-thought image part (interim thought drafts skipped).
+        const image = extractGeneratedImage(response);
+        if (!image) {
           // FC-037: include the safety blockReason (when present) so any
           // propagation of this error maps to 'safety_blocked'.
           const blockReason = response.promptFeedback?.blockReason;
           throw new Error(`No image data in ${IMAGE_MODEL} response${blockReason ? ` — safety blocked: ${blockReason}` : ''}`);
         }
-        return { imageData, mimeType };
+        return { imageData: image.data, mimeType: image.mimeType };
       } catch (error) {
         lastError = error;
         if (isRetryableError(error) && attempt < MAX_RETRIES) {
@@ -570,20 +565,12 @@ export async function generateCharacterReference(
       const elapsed = Date.now() - startTime;
       console.log(`Character reference ${charTag} generated in ${elapsed}ms (attempt ${attempt})`);
 
-      const parts = response.candidates?.[0]?.content?.parts || [];
-      let imageData: string | null = null;
-      let mimeType = 'image/png';
-      for (const part of parts) {
-        if (part.inlineData?.data) {
-          imageData = part.inlineData.data;
-          mimeType = part.inlineData.mimeType || 'image/png';
-          break;
-        }
-      }
-      if (!imageData) {
+      const image = extractGeneratedImage(response);
+      if (!image) {
         const blockReason = response.promptFeedback?.blockReason;
         throw new Error(`No image data in character reference response${blockReason ? ` — safety blocked: ${blockReason}` : ''}`);
       }
+      const { data: imageData, mimeType } = image;
 
       const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
       const filename = `stories/${storyId}/character-refs/${safeNameSlug}-${uuid()}.${extension}`;
@@ -657,20 +644,12 @@ export async function generateCastReference(
       );
       const elapsed = Date.now() - startTime;
       console.log(`Cast reference generated in ${elapsed}ms (attempt ${attempt})`);
-      const parts = response.candidates?.[0]?.content?.parts || [];
-      let imageData: string | null = null;
-      let mimeType = 'image/png';
-      for (const part of parts) {
-        if (part.inlineData?.data) {
-          imageData = part.inlineData.data;
-          mimeType = part.inlineData.mimeType || 'image/png';
-          break;
-        }
-      }
-      if (!imageData) {
+      const image = extractGeneratedImage(response);
+      if (!image) {
         const blockReason = response.promptFeedback?.blockReason;
         throw new Error(`No image data in cast reference response${blockReason ? ` — safety blocked: ${blockReason}` : ''}`);
       }
+      const { data: imageData, mimeType } = image;
       const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
       const filename = `stories/${storyId}/character-refs/cast-${uuid()}.${extension}`;
       const publicUrl = await uploadGeneratedImage(imageData, mimeType, filename);
@@ -745,20 +724,12 @@ export async function generateTitlePage(
       const elapsed = Date.now() - startTime;
       console.log(`Title page generated in ${elapsed}ms (attempt ${attempt})`);
 
-      const parts = response.candidates?.[0]?.content?.parts || [];
-      let imageData: string | null = null;
-      let mimeType = 'image/png';
-      for (const part of parts) {
-        if (part.inlineData?.data) {
-          imageData = part.inlineData.data;
-          mimeType = part.inlineData.mimeType || 'image/png';
-          break;
-        }
-      }
-      if (!imageData) {
+      const image = extractGeneratedImage(response);
+      if (!image) {
         const blockReason = response.promptFeedback?.blockReason;
         throw new Error(`No image data in title page response${blockReason ? ` — safety blocked: ${blockReason}` : ''}`);
       }
+      const { data: imageData, mimeType } = image;
 
       const extension = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
       const filename = `stories/${storyId}/title-${uuid()}.${extension}`;
