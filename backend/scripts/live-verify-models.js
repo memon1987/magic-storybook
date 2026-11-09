@@ -54,6 +54,10 @@ const PHASES = arg('phases', ALL_PHASES.join(',')).split(',');
 const PARTIAL = ALL_PHASES.some((p) => !PHASES.includes(p));
 const NO_BUILD = flag('no-build');
 const ART_STYLE = arg('art-style', 'watercolor');
+const ART_STYLES = ['watercolor', 'cartoon', 'storybook-classic', 'claymation', 'studio-ghibli', 'pixar-3d'];
+if (!ART_STYLES.includes(ART_STYLE)) { process.stderr.write(`--art-style must be one of: ${ART_STYLES.join(', ')}\n`); process.exit(1); }
+const unknownPhases = arg('phases', ALL_PHASES.join(',')).split(',').filter((p) => !ALL_PHASES.includes(p));
+if (unknownPhases.length) { process.stderr.write(`unknown --phases value(s): ${unknownPhases.join(', ')} (allowed: ${ALL_PHASES.join(', ')})\n`); process.exit(1); }
 
 const BUCKET = 'live-verify-in-memory-bucket';
 const TIME_BUDGET_MS = 300_000;      // generateAllIllustrations, medium story
