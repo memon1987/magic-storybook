@@ -3,10 +3,12 @@
  *
  * 1. Every image call site stores the FINAL image, not an interim thought
  *    draft (and honors the final part's mime type).
- * 2. Model routing policy: image calls share one model ID, text calls share
- *    another, and none is a preview / experimental / -latest alias. Literal
- *    IDs are deliberately NOT asserted — that would only lock in today's
- *    constants and fail on every legitimate upgrade.
+ * 2. Safety settings: all seven call sites send the four categories at
+ *    BLOCK_LOW_AND_ABOVE.
+ * 3. Model routing policy: the four image calls share one model ID, no text
+ *    call uses it, and no ID is a preview / experimental / -latest alias
+ *    except the explicit allow-list (FC-047). Literal IDs are otherwise NOT
+ *    asserted — that would only lock in today's constants.
  *
  * Mirrors the mock-before-import pattern in gemini-aspect.test.ts, with a
  * Storage mock that captures every save and a generateContent mock that
@@ -172,32 +174,73 @@ describe('FC-045 — every image call site stores the final image, never a thoug
   });
 });
 
+/**
+ * Drives all seven generateContent call sites. Returns the captured calls for
+ * the three text sites and the four image sites separately.
+ */
+async function driveAllCallSites() {
+  generateCalls.length = 0;
+  const story = await generateStory({ childName: 'Mira', setting: 'forest', moral: 'kindness', length: 'short' }, 'story-s');
+  expect(story.title).toBe('Mira and the Meadow');
+  expect(await generateModerationText(`${MODERATION_SENTINEL} classify this story`, 'story-m')).toBe(VERDICT_JSON);
+  expect(
+    await generateVisionModerationText('classify this page', { data: b64('FINAL'), mimeType: 'image/jpeg' }, 'story-v'),
+  ).toBe(VERDICT_JSON);
+  const textCalls = generateCalls.splice(0);
+  expect(textCalls).toHaveLength(3);
+
+  await callIllustration();
+  await callCharRef();
+  await callCastRef();
+  await callTitle();
+  const imageCalls = generateCalls.splice(0);
+  expect(imageCalls).toHaveLength(4);
+  return { textCalls, imageCalls };
+}
+
+describe('FC-045 — safety settings are sent on every call', () => {
+  it('all seven call sites send exactly the four categories at BLOCK_LOW_AND_ABOVE', async () => {
+    const { textCalls, imageCalls } = await driveAllCallSites();
+    const expected = [
+      'HARM_CATEGORY_DANGEROUS_CONTENT',
+      'HARM_CATEGORY_HARASSMENT',
+      'HARM_CATEGORY_HATE_SPEECH',
+      'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+    ];
+    for (const call of [...textCalls, ...imageCalls]) {
+      const settings = (call.config as { safetySettings?: Array<{ category: string; threshold: string }> } | undefined)
+        ?.safetySettings;
+      expect(Array.isArray(settings)).toBe(true);
+      expect(settings!.map((s) => s.category).sort()).toEqual(expected);
+      for (const s of settings!) expect(s.threshold).toBe('BLOCK_LOW_AND_ABOVE');
+    }
+  });
+});
+
+// FC-045 / FC-047: TEXT_MODEL deliberately stays on this preview ID because it
+// also runs both fail-closed safety classifiers; moving it needs the labelled
+// safety evaluation in FC-047. Remove this entry when FC-047 lands. Do not add
+// new entries without a plan.
+const ALLOWED_PREVIEW_IDS = ['gemini-3-flash-preview'];
+const PREVIEW_ALIAS_PATTERN = /(^|-)(preview|exp|experimental|latest)(-|$)/i;
+
 describe('FC-045 — model routing policy', () => {
-  it('image calls share one model, text calls share another, and none is a preview/exp/latest alias', async () => {
-    const story = await generateStory({ childName: 'Mira', setting: 'forest', moral: 'kindness', length: 'short' }, 'story-s');
-    expect(story.title).toBe('Mira and the Meadow');
-    expect(await generateModerationText(`${MODERATION_SENTINEL} classify this story`, 'story-m')).toBe(VERDICT_JSON);
-    expect(
-      await generateVisionModerationText('classify this page', { data: b64('FINAL'), mimeType: 'image/jpeg' }, 'story-v'),
-    ).toBe(VERDICT_JSON);
-    const textModels = generateCalls.map((c) => c.model);
-    expect(textModels).toHaveLength(3);
+  it('image calls share one ID, no text call uses it, and no new preview/exp/latest ID is pinned', async () => {
+    const { textCalls, imageCalls } = await driveAllCallSites();
+    const textModels = textCalls.map((c) => c.model);
+    const imageModels = imageCalls.map((c) => c.model);
 
-    generateCalls.length = 0;
-    await callIllustration();
-    await callCharRef();
-    await callCastRef();
-    await callTitle();
-    const imageModels = generateCalls.map((c) => c.model);
-    expect(imageModels).toHaveLength(4);
-
-    expect(new Set(textModels).size).toBe(1);
+    // NOTE: the three text calls are deliberately NOT required to share one ID
+    // — FC-047 may split the moderation model from the story model.
     expect(new Set(imageModels).size).toBe(1);
-    expect(textModels[0]).not.toBe(imageModels[0]);
+    const imageModel = imageModels[0];
+    for (const m of textModels) expect(m).not.toBe(imageModel);
+
     for (const model of [...textModels, ...imageModels]) {
       expect(typeof model).toBe('string');
       expect(model.length).toBeGreaterThan(0);
-      expect(model).not.toMatch(/preview|exp|latest/i);
+      if (ALLOWED_PREVIEW_IDS.includes(model)) continue;
+      expect(model).not.toMatch(PREVIEW_ALIAS_PATTERN);
     }
   });
 });

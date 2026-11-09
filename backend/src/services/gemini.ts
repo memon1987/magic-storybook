@@ -81,15 +81,19 @@ async function scoreBakedText(imageBase64: string, intendedText: string): Promis
   }
 }
 
-// Model constants (FC-045: GA model IDs only).
-// Preview IDs get short-notice shutdowns; the previous image preview ID was
-// already past its listed shutdown date. TEXT_MODEL serves story text AND both
-// fail-closed moderation classifiers; IMAGE_MODEL serves every image call.
+// Model constants.
+// IMAGE_MODEL (every image call) moved to a GA ID in FC-045: preview IDs get
+// short-notice shutdowns, and the previous image preview ID was already past
+// its listed shutdown date. Any interim "thought" images in a response are
+// skipped by extractGeneratedImage.
+// TEXT_MODEL is DELIBERATELY still a preview ID: it serves story text AND both
+// fail-closed safety classifiers (text + vision moderation), so changing it
+// changes how every story is judged and requires the labelled safety
+// evaluation in FC-047. gemini-models.test.ts allow-lists this one ID.
 // The image model's thinking level is not controllable on @google/genai 0.7.0
-// (no thinkingLevel in ThinkingConfig) — see FC-042 for the SDK upgrade.
-// Interim thought images are filtered out by extractGeneratedImage.
+// (the SDK drops thinkingLevel) — see FC-042 for the SDK upgrade.
 // Measured latency / text-fidelity numbers: docs/plans/fc-045.md, Execution.
-const TEXT_MODEL = 'gemini-3.8-flash';
+const TEXT_MODEL = 'gemini-3-flash-preview';
 const IMAGE_MODEL = 'gemini-nano-banana-2.1';
 
 // FC-037 layer 2: explicit, strict safety settings on EVERY Gemini call —

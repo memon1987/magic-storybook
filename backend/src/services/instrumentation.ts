@@ -60,6 +60,65 @@ export interface CallEvent {
   latencyMs: number;
   statusCode?: number;
   errorClass?: string;
+  // FC-045: success-path response telemetry (see responseTelemetry). Enums,
+  // numbers and a model string only — never part text, prompt text or
+  // finishMessage (may contain a child's name or story content).
+  modelVersion?: string;
+  finishReason?: string;
+  blockReason?: string;
+  promptTokens?: number;
+  outputTokens?: number;
+  thoughtTokens?: number;
+  totalTokens?: number;
+}
+
+export type ResponseTelemetry = Pick<
+  CallEvent,
+  'modelVersion' | 'finishReason' | 'blockReason' | 'promptTokens' | 'outputTokens' | 'thoughtTokens' | 'totalTokens'
+>;
+
+function asRecord(v: unknown): Record<string, unknown> | undefined {
+  return v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : undefined;
+}
+
+/**
+ * FC-045: pull served-model, finish/block reason and token usage out of a
+ * generateContent response, defensively. A field is included only when present
+ * with the right type (string / finite number); absent fields are omitted, not
+ * undefined/null. Never throws — any unexpected shape (including a throwing
+ * getter) yields {}.
+ */
+export function responseTelemetry(result: unknown): ResponseTelemetry {
+  try {
+    const r = asRecord(result);
+    if (!r) return {};
+    const out: ResponseTelemetry = {};
+    const str = (v: unknown): v is string => typeof v === 'string';
+    const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+    const modelVersion = r.modelVersion;
+    if (str(modelVersion)) out.modelVersion = modelVersion;
+
+    const candidates = r.candidates;
+    const first = Array.isArray(candidates) ? asRecord(candidates[0]) : undefined;
+    const finishReason = first?.finishReason;
+    if (str(finishReason)) out.finishReason = finishReason;
+
+    const blockReason = asRecord(r.promptFeedback)?.blockReason;
+    if (str(blockReason)) out.blockReason = blockReason;
+
+    const usage = asRecord(r.usageMetadata);
+    if (usage) {
+      const { promptTokenCount, candidatesTokenCount, thoughtsTokenCount, totalTokenCount } = usage;
+      if (num(promptTokenCount)) out.promptTokens = promptTokenCount;
+      if (num(candidatesTokenCount)) out.outputTokens = candidatesTokenCount;
+      if (num(thoughtsTokenCount)) out.thoughtTokens = thoughtsTokenCount;
+      if (num(totalTokenCount)) out.totalTokens = totalTokenCount;
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 function memorySnapshot(): { rssMb: number; heapUsedMb: number; externalMb: number } {
@@ -129,7 +188,10 @@ export async function instrumentedGenerateContent<T>(
   const start = Date.now();
   try {
     const result = await fn();
-    emitCallEvent({ storyId, kind, attempt, outcome: 'success', latencyMs: Date.now() - start });
+    emitCallEvent({
+      storyId, kind, attempt, outcome: 'success', latencyMs: Date.now() - start,
+      ...responseTelemetry(result),
+    });
     return result;
   } catch (err) {
     const { statusCode, errorClass } = classifyError(err);

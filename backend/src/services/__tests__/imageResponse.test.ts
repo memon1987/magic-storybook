@@ -17,6 +17,14 @@ describe('FC-045 — extractGeneratedImage', () => {
     expect(extractGeneratedImage(r)).toEqual({ data: 'FINAL', mimeType: 'image/jpeg' });
   });
 
+  it('skips a thought image placed AFTER the final image', () => {
+    const r = respond([
+      { inlineData: { data: 'FINAL', mimeType: 'image/jpeg' } },
+      { inlineData: { data: 'DRAFT', mimeType: 'image/png' }, thought: true },
+    ]);
+    expect(extractGeneratedImage(r)).toEqual({ data: 'FINAL', mimeType: 'image/jpeg' });
+  });
+
   it('returns the only image in a single-part response', () => {
     const r = respond([{ inlineData: { data: 'ONLY', mimeType: 'image/png' } }]);
     expect(extractGeneratedImage(r)).toEqual({ data: 'ONLY', mimeType: 'image/png' });

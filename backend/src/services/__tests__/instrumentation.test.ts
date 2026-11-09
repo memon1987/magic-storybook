@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { classifyError, instrumentedGenerateContent } from '../instrumentation';
+import { classifyError, instrumentedGenerateContent, responseTelemetry } from '../instrumentation';
 
 describe('classifyError', () => {
   it('detects fetch failed (the 2026-05-12 instance-death trigger)', () => {
@@ -71,5 +71,90 @@ describe('instrumentedGenerateContent', () => {
     expect(payload.errorClass).toBe('fetch_failed');
     expect(payload.kind).toBe('page');
     expect(payload.attempt).toBe(2);
+  });
+});
+
+describe('FC-045 — call telemetry (responseTelemetry)', () => {
+  const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  afterEach(() => logSpy.mockClear());
+
+  const lastPayload = () => JSON.parse(logSpy.mock.calls[logSpy.mock.calls.length - 1][0] as string);
+  const TELEMETRY_KEYS = ['modelVersion', 'finishReason', 'blockReason', 'promptTokens', 'outputTokens', 'thoughtTokens', 'totalTokens'];
+
+  it('success event carries the seven fields from a realistic response object', async () => {
+    const response = {
+      modelVersion: 'gemini-nano-banana-2.1-001',
+      candidates: [
+        {
+          finishReason: 'STOP',
+          finishMessage: 'Mira finished her story',
+          content: { parts: [{ text: 'Mira the rabbit hopped.' }] },
+        },
+      ],
+      promptFeedback: { blockReason: 'SAFETY' },
+      usageMetadata: { promptTokenCount: 1200, candidatesTokenCount: 1290, thoughtsTokenCount: 310, totalTokenCount: 2800 },
+    };
+    const out = await instrumentedGenerateContent('story-t1', 'page', 1, async () => response);
+    expect(out).toBe(response);
+    const payload = lastPayload();
+    expect(payload).toMatchObject({
+      event: 'call', outcome: 'success', kind: 'page',
+      modelVersion: 'gemini-nano-banana-2.1-001',
+      finishReason: 'STOP',
+      blockReason: 'SAFETY',
+      promptTokens: 1200,
+      outputTokens: 1290,
+      thoughtTokens: 310,
+      totalTokens: 2800,
+    });
+    // Never logs finishMessage, part text or prompt text.
+    const line = logSpy.mock.calls[logSpy.mock.calls.length - 1][0] as string;
+    expect(line).not.toContain('finishMessage');
+    expect(line).not.toContain('Mira');
+  });
+
+  it('fields absent from the response are absent from the event (no undefined/null keys)', async () => {
+    const response = {
+      modelVersion: 42, // wrong type → omitted
+      candidates: [{ finishReason: 'STOP' }],
+      usageMetadata: { promptTokenCount: 10, totalTokenCount: Number.NaN }, // NaN → omitted
+    };
+    await instrumentedGenerateContent('story-t2', 'story_text', 1, async () => response);
+    const payload = lastPayload();
+    expect(payload.finishReason).toBe('STOP');
+    expect(payload.promptTokens).toBe(10);
+    for (const k of ['modelVersion', 'blockReason', 'outputTokens', 'thoughtTokens', 'totalTokens']) {
+      expect(Object.prototype.hasOwnProperty.call(payload, k)).toBe(false);
+    }
+    const t = responseTelemetry(response);
+    expect(Object.keys(t).sort()).toEqual(['finishReason', 'promptTokens']);
+    expect(Object.values(t).some((v) => v === undefined || v === null)).toBe(false);
+  });
+
+  it('string / null / throwing-getter results do not throw and the original result is returned', async () => {
+    const throwing = {};
+    Object.defineProperty(throwing, 'candidates', { get() { throw new Error('boom'); }, enumerable: true });
+    Object.defineProperty(throwing, 'modelVersion', { get() { throw new Error('boom'); }, enumerable: true });
+
+    for (const result of ['plain text', null, throwing] as unknown[]) {
+      expect(() => responseTelemetry(result)).not.toThrow();
+      expect(responseTelemetry(result)).toEqual({});
+      logSpy.mockClear();
+      const out = await instrumentedGenerateContent('story-t3', 'moderation', 1, async () => result);
+      expect(out).toBe(result);
+      const payload = lastPayload();
+      expect(payload.outcome).toBe('success');
+      for (const k of TELEMETRY_KEYS) expect(Object.prototype.hasOwnProperty.call(payload, k)).toBe(false);
+    }
+  });
+
+  it('failure-path event is unchanged (no telemetry fields)', async () => {
+    const err = new Error('status: 502 Bad Gateway');
+    await expect(instrumentedGenerateContent('story-t4', 'char_ref', 3, async () => { throw err; })).rejects.toBe(err);
+    const payload = lastPayload();
+    expect(Object.keys(payload).sort()).toEqual(
+      ['attempt', 'errorClass', 'event', 'kind', 'latencyMs', 'outcome', 'statusCode', 'storyId', 'ts'],
+    );
+    expect(payload).toMatchObject({ outcome: 'failure', errorClass: '5xx', statusCode: 502, kind: 'char_ref', attempt: 3 });
   });
 });
