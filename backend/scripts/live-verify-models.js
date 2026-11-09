@@ -40,9 +40,21 @@ const Module = require('module');
 const { spawnSync } = require('child_process');
 
 const args = process.argv.slice(2);
+const VALUE_FLAGS = ['backend', 'out', 'phases', 'art-style'];
+const BOOL_FLAGS = ['no-build'];
+// Strict parsing: a mistyped flag must fail here, not silently become a paid default run.
+for (let i = 0; i < args.length; i += 1) {
+  const name = args[i].startsWith('--') ? args[i].slice(2) : null;
+  const bad = (why) => { process.stderr.write(`${why}\nflags: ${VALUE_FLAGS.map((f) => `--${f} <value>`).join(' ')} ${BOOL_FLAGS.map((f) => `--${f}`).join(' ')}\n`); process.exit(1); };
+  if (name === null) bad(`unexpected argument: ${args[i]}`);
+  if (BOOL_FLAGS.includes(name)) continue;
+  if (!VALUE_FLAGS.includes(name)) bad(`unknown flag: ${args[i]} (use "--flag value", not "--flag=value")`);
+  if (args[i + 1] === undefined || args[i + 1].startsWith('--')) bad(`${args[i]} needs a value`);
+  i += 1;
+}
 const arg = (name, dflt) => {
   const i = args.indexOf(`--${name}`);
-  return i >= 0 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : dflt;
+  return i >= 0 ? args[i + 1] : dflt;
 };
 const flag = (name) => args.includes(`--${name}`);
 
@@ -140,7 +152,7 @@ const capture = (...parts) => {
 console.log = capture; console.warn = capture; console.error = capture; console.info = capture;
 
 const gemini = require(dist('services/gemini.js'));
-const { moderateStoryText } = require(dist('services/moderation.js'));
+const { moderateStoryText, extractFirstJsonObject } = require(dist('services/moderation.js'));
 const { moderatePageImage } = require(dist('services/visionModeration.js'));
 const { downloadRef } = require(dist('services/gcsDownload.js'));
 const { emptyJobState } = require(dist('services/jobState.js'));
@@ -257,7 +269,12 @@ async function phaseModeration() {
       // "verdict" ONLY when the classifier itself said unsafe. A reply with no verdict, a
       // parse failure, a timeout or an API error is not evidence the classifier works.
       let saidUnsafe = false;
-      try { const m = typeof raw === 'string' && raw.match(/\{[\s\S]*\}/); saidUnsafe = !!m && JSON.parse(m[0]).verdict === 'unsafe'; } catch { saidUnsafe = false; }
+      try {
+        // Same extraction production uses; a verdict is a string that is not "safe" in any casing.
+        const slice = typeof raw === 'string' ? extractFirstJsonObject(raw.replace(/```(?:json)?/gi, '')) : null;
+        const verdict = slice ? JSON.parse(slice).verdict : undefined;
+        saidUnsafe = typeof verdict === 'string' && verdict.trim().toLowerCase() !== 'safe';
+      } catch { saidUnsafe = false; }
       const call = calls.filter((c) => c.storyId === id && c.kind === 'moderation').pop();
       // A platform-level safety block on the classifier call is a real (fail-closed) block,
       // but only when the call itself recorded one and returned no text.
@@ -342,7 +359,10 @@ async function phasePipeline() {
   check('rate-limits', rateLimited.length === 0, `${rateLimited.length} call(s) returned 429; other failed calls: ${failures.length - rateLimited.length}${failures.length ? ` (${[...new Set(failures.map((c) => `${c.errorClass}/${c.statusCode}`))].join(', ')})` : ''}`);
 
   const versions = [...new Set(imageCalls.filter((c) => c.outcome === 'success').map((c) => c.modelVersion || 'NOT LOGGED'))];
-  check('served-model', versions.length === 1 && versions[0] !== 'NOT LOGGED', `image calls report modelVersion: ${versions.join(', ') || 'none'} (build pins ${IMAGE_MODEL})`);
+  const servedIsPinned = versions.length === 1 && versions[0].includes(IMAGE_MODEL);
+  check('served-model', servedIsPinned,
+    `image calls report modelVersion: ${versions.join(', ') || 'none'}; build pins ${IMAGE_MODEL}` +
+    (servedIsPinned ? '' : ' — not uniform, not logged, or served by a DIFFERENT model than pinned (a reroute?)'));
   const finish = {};
   for (const c of imageCalls.filter((x) => x.outcome === 'success')) finish[c.finishReason || 'NOT LOGGED'] = (finish[c.finishReason || 'NOT LOGGED'] || 0) + 1;
   say(`image finishReason counts: ${JSON.stringify(finish)}`);
@@ -402,7 +422,11 @@ async function phaseVision() {
 // Anything uncaught fails the run loudly. It is never swallowed: in production an
 // unhandled rejection would crash the worker, so it must not be able to hide here.
 for (const ev of ['uncaughtException', 'unhandledRejection']) {
-  process.on(ev, (e) => { say(`ABORTED ${ev}: ${errLine(e)}`); process.exit(1); });
+  process.on(ev, (e) => {
+    try { fs.appendFileSync(path.join(OUT, 'abort.log'), `${ev}: ${e && e.stack ? e.stack : String(e)}\n`); } catch { /* best effort */ }
+    say(`ABORTED ${ev}: ${errLine(e)} (stack in ${path.join(OUT, 'abort.log')})`);
+    process.exit(1);
+  });
 }
 
 (async () => {
@@ -423,6 +447,6 @@ for (const ev of ['uncaughtException', 'unhandledRejection']) {
   const notAPass = PARTIAL || NO_BUILD;
   if (notAPass) say(`RESULT ${PARTIAL ? 'PARTIAL RUN' : 'NO-BUILD RUN'} — not a pass. ${checks.length - failed.length}/${checks.length} checks passed for phases ${PHASES.join(',')}.`);
   else if (failed.length) say(`RESULT FAILED for IMAGE_MODEL=${IMAGE_MODEL} artStyle=${ART_STYLE}: ${failed.map((c) => c.name).join(', ')} (${checks.length - failed.length}/${checks.length} passed)`);
-  else say(`RESULT ALL ${checks.length} CHECKS PASSED for TEXT_MODEL=${TEXT_MODEL} IMAGE_MODEL=${IMAGE_MODEL} artStyle=${ART_STYLE} on a fresh build of commit ${gitHead}`);
+  else say(`RESULT ALL ${checks.length} CHECKS PASSED for TEXT_MODEL=${TEXT_MODEL} IMAGE_MODEL=${IMAGE_MODEL} artStyle=${ART_STYLE} on a fresh build of commit ${gitHead}${gitDirty ? ' PLUS UNCOMMITTED src changes' : ''}`);
   rawLog.end(() => process.exit(!notAPass && failed.length === 0 ? 0 : 2));
 })().catch((e) => { say(`ABORTED ${errLine(e)}`); rawLog.end(() => process.exit(1)); });
