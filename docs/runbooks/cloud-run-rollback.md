@@ -70,11 +70,27 @@ git revert --no-edit <bad-commit-sha>
 git push origin main
 ```
 
-This triggers a new Cloud Build that deploys a "fixed" revision identical to the rollback target. The traffic routing follows the new deployment automatically.
+This triggers a new Cloud Build that deploys a "fixed" revision identical to the rollback target.
+
+### Step 5 — Un-pin traffic (REQUIRED)
+
+**The traffic routing does NOT follow the new deployment automatically.** Step 2's `update-traffic --to-revisions=...` pins the service to a named revision, and Cloud Run keeps that traffic split for every later deployment. `cloudbuild.yaml` deploys with no traffic flags, so until you un-pin, the revert **and every later backend merge** will build green and serve 0 % of traffic.
+
+After the revert's Cloud Build finishes and the new revision is Ready:
+
+```bash
+gcloud run services update-traffic storybook-api --region=us-central1 --to-latest
+gcloud run services describe storybook-api --region=us-central1 \
+  --format='value(status.latestReadyRevisionName,status.traffic)'
+```
+
+The second command must show 100 % on the latest ready revision with `latestRevision: true`.
+
+(Corrected 2026-11-09 during FC-045 review. An earlier version of this runbook said traffic "follows the new deployment automatically"; that was wrong and this procedure had never been exercised.)
 
 ## Validation
 
-- `gcloud run services describe storybook-api --region=us-central1 --format='value(status.url,status.traffic)'` shows 100% traffic on the intended revision.
+- `gcloud run services describe storybook-api --region=us-central1 --format='value(status.url,status.traffic)'` shows 100% traffic on the intended revision — and, once Step 5 is done, `latestRevision: true` (not a pinned revision name).
 - The error rate alert auto-resolves within ~5 min (the alert's `autoClose` is 24h but the underlying metric drops as soon as traffic shifts).
 - Real-user requests succeed (check Cloud Run logs for 200s).
 

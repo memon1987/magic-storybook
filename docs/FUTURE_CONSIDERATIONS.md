@@ -268,34 +268,75 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 **Update 2026-11-09 (from FC-045 research):** the gap has widened — installed is still 0.7.0, latest is **3.0.0**. Two more reasons to do this now exist: (1) the current image model (`gemini-nano-banana-2.1`) defaults to `medium` thinking, which is billed and slower, and 0.7.0's `ThinkingConfig` cannot send `thinkingLevel`; (2) Google's docs now show image generation only through the Interactions API (`generateContent` "remains fully supported", but it is called "legacy"). Scope the upgrade to cover `thinkingLevel`, `imageConfig.aspectRatio`, and a decision on Interactions vs `generateContent`.
 
-### FC-045: Gemini model refresh — move text + image generation off preview model IDs
+**Update 2026-11-09 (from FC-045 review):** review A's staged alternative is recorded here — if `gemini-nano-banana-2.1` at its default `medium` thinking proves too slow or costly, the fix is this FC (SDK upgrade, or direct REST for the four image calls) to send `thinkingLevel: minimal` and a config-level 16:9, rather than another model swap. FC-045 kept `gemini-3.1-flash-image` (GA build of the previous model, `minimal` thinking, deprecated 2026-10-06 with no shutdown date) as its fallback.
 
-**Status:** Plan published
+### FC-045: Gemini image model refresh — off the retired preview model ID
+
+**Status:** Executing (PR #54 open; merge gated on live verification)
 **Size estimate:** M
 **Owner:** Zeshan (executing via Claude, 2026-11-09)
 **Plan file:** [docs/plans/fc-045.md](plans/fc-045.md)
 
-**Problem / opportunity:** the backend pins two preview model IDs. `gemini-3.1-flash-image-preview` is past its listed earliest shutdown date (2026-06-25) and is no longer on Google's models page; `gemini-3-flash-preview` has no shutdown date but previews get ~2 weeks' notice. The TestFlight beta is being renewed (build 18) and its preflight generates a real story, so the backend has to be on supported models first.
+**Problem / opportunity:** the backend's image model, `gemini-3.1-flash-image-preview`, is past its listed earliest shutdown date (2026-06-25) and is no longer on Google's models page. The TestFlight beta is being renewed (build 18) and its preflight generates a real story, so the backend has to be on a supported image model first.
 
-**Approach (see plan):** `IMAGE_MODEL` → `gemini-nano-banana-2.1`, `TEXT_MODEL` → `gemini-3.8-flash`; a pure helper that skips interim "thinking" images so a draft is never stored; a test that bans preview / alias model IDs. No SDK upgrade (FC-042). Merge is gated on a live verification run.
+**Approach (see plan):** `IMAGE_MODEL` → `gemini-nano-banana-2.1` (fallback `gemini-3.1-flash-image`, decided by live verification); a pure helper that skips interim "thinking" images so a draft is never stored; additive per-call telemetry (served model, finish reason, tokens); tests that ban new preview / alias model IDs and assert the safety settings on every call. No SDK upgrade (FC-042). **The text model is deliberately not changed** — it also runs both safety classifiers (FC-047). Scope was narrowed from "both models" after two adversarial reviews.
 
 **Open questions:**
 - Blocking: Gemini prepaid credits are depleted (HTTP 402) — live verification cannot run until topped up.
 
-### FC-046: Detect a silent generation outage (credit depletion, retired model ID)
+### FC-046: Detect a silent generation outage (credit depletion, retired or rerouted model ID)
 
 **Status:** Consideration
 **Size estimate:** S-M
 **Owner:** unassigned
-**Filed by:** FC-045 (found while probing)
+**Filed by:** FC-045 (found while probing; scope extended after its review)
 
-**Problem / opportunity:** on 2026-11-09 every Gemini call from the production key returned `402 Payment Required — "Your prepayment credits are depleted"`. Nothing alerted. There were no generation log lines inside the log-retention window, so it is unknown how long generation had been down. A retired model ID would fail the same silent way. The FC-032 alert policies watch 5xx rates and Cloud Build failures; with no traffic there is nothing for them to fire on.
+**Problem / opportunity:** on 2026-11-09 every Gemini call from the production key returned `402 Payment Required — "Your prepayment credits are depleted"`. Nothing alerted. There were no generation log lines inside the log-retention window, so it is unknown how long generation had been down. A retired model ID would fail the same silent way, and a *rerouted* one would not fail at all: Google redirected `gemini-3.7-flash` to `gemini-3.8-flash` eight weeks after GA, so the model behind a pinned ID — including the one behind both safety classifiers — can change with no error. The FC-032 alert policies watch 5xx rates and Cloud Build failures; with no traffic there is nothing for them to fire on.
 
-**Idea:** a scheduled canary (Cloud Scheduler → an authenticated admin route) that makes one cheap text call and one `models.list` check that the pinned model IDs are still served, emits a structured log line, and a log-based alert on canary failure. Also consider mapping `402` / "credits are depleted" to its own `FailureCode` so the mobile app can say something more useful than a generic generation error.
+**Idea:**
+- A scheduled canary (Cloud Scheduler → an authenticated admin route) that makes one cheap text call and one image call, emits a structured log line, and a log-based alert on canary failure. A `models.list` check alone is not enough — a rerouted ID is still listed.
+- Alert when the `modelVersion` logged on `call` events (added in FC-045) changes for a given pinned ID.
+- A small golden-set check for the two safety classifiers in the canary (a handful of known-safe and known-unsafe inputs), so a silent classifier change is caught by behavior, not just by name. Depends on the labelled set from FC-047.
+- Map `402` / "credits are depleted" to its own `FailureCode` so the mobile app can say something more useful than a generic generation error.
 
 **Open questions:**
 - Is prepaid billing the right mode for a product with real users, or should the key move to postpaid / a budget alert?
-- Should the canary also generate one image (a few cents per run) or is the text call plus `models.list` enough?
+
+### FC-047: Text + moderation model upgrade, with a labelled safety evaluation set
+
+**Status:** Consideration
+**Size estimate:** M-L
+**Owner:** unassigned
+**Filed by:** FC-045 review round 1 (deferred scope + review B findings H1–H3, M1, L2, L3)
+
+**Problem / opportunity:** `TEXT_MODEL` is still the preview ID `gemini-3-flash-preview` (no shutdown date; previews get about two weeks' notice). It serves story text **and** both fail-closed safety classifiers (FC-037 text gate, FC-041 vision gate), so changing it changes how every story is judged. There is no labelled evaluation set to prove a new classifier model is at least as safe, and the vision gate's catch rate on unsafe images has **never been measured, on any model** (FC-041 shipped with no real API call). Nobody has verified that Google's image endpoint honors our `safetySettings` either — the vision gate is the only image guard by design.
+
+**Idea:**
+- Build a labelled set: at least 20 unsafe stories across every category in the classifier prompt plus borderline cases and a prompt-injection case; at least 10 unsafe images (locally rendered unsafe baked-in text; public-domain weapon / gore art); at least 60 benign text and 60 benign image inputs including mild-peril courage stories and a 12-page story.
+- Measure the **current** model first (that baseline does not exist), then candidates. Accept a candidate only if unsafe recall is no lower and the benign pass rate is no worse; record p50 / p95 / max latency against the 30 s fail-closed timeout (a story makes 7–14 sequential classifier calls and any one block fails it).
+- Split `MODERATION_MODEL` from the story-text model so the generator and its judge are changed under separate control.
+- Candidate notes from FC-045 research: `gemini-3.8-flash` defaults to `medium` thinking (the current preview defaults to `high`), rejects `minimal`, and "can use more tokens by design"; `gemini-3.6-flash` is the same list price and supports `minimal`. SDK 0.7.0 cannot set the level (FC-042).
+- Use structured output (`responseMimeType` / `responseSchema`, available on SDK 0.7.0) for the classifiers; today `"Safe"` / `"SAFE"` or prose with braces before the JSON blocks a story.
+- Decide whether classifier 503 / 429 should be retried before failing closed (today each becomes `safety_blocked`, which is non-resumable in the app).
+- Verify, with deliberately unsafe image prompts, whether Google's image endpoint honors our `safetySettings` at all, and how a block is reported (`promptFeedback`, `finishReason`, HTTP error). Until that is known the vision gate must be treated as the only image guard.
+
+### FC-048: Safety-pipeline gaps found in the FC-045 review
+
+**Status:** Consideration
+**Size estimate:** M
+**Owner:** unassigned
+**Filed by:** FC-045 review round 1 (review B findings M4, L1, L4, L5, L8). All pre-existing; none introduced by FC-045.
+
+**Problem / opportunity:**
+- **Server-side resume accepts `safety_blocked` stories** (`routes/stories.ts`): only the mobile UI hides Resume, so a direct API call re-rolls the vision classifier over the same images until one pass lets the story through.
+- **An image safety block does not fail the story.** A block reported as `finishReason: IMAGE_SAFETY` (or an empty response) yields a `placehold.co` page and the story still completes. FC-045 makes this visible in logs (`finishReason` on `call` events) but does not change the behavior.
+- **Reference images are never vision-moderated.** Character and cast references are public GCS objects and are in the client field allow-list; images of blocked stories also stay public in GCS.
+- **Placeholder pages are hosted by a third party** (`placehold.co`) and carry no narration (text is baked into images); an all-placeholder story passes the vision gate vacuously.
+- **Failure labels drift:** a 400 that merely names `safety_settings` becomes `safety_blocked`; a story-text `finishReason: SAFETY` becomes `unknown` and resumable.
+
+**Open questions:**
+- Should a safety-blocked page fail the whole story (fail closed) rather than ship a placeholder?
+- Should blocked stories' images be deleted or made private?
 
 ### FC-049: Production readiness — billing isolation, inference platform, cost per story, launch requirements (epic)
 
