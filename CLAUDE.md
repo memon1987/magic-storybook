@@ -65,8 +65,8 @@ After implementation is complete, update the plan file:
 - **Storage**: Google Cloud Storage (for illustration images)
 - **Auth**: Firebase Authentication (email/password)
 - **AI Models**:
-  - Text Generation: `gemini-3-flash-preview`
-  - Image Generation: `gemini-3.1-flash-image-preview` ("Nano Banana 2", ~90% text accuracy, 4-6s/image)
+  - Text Generation (story text + both moderation classifiers): `gemini-3.8-flash`
+  - Image Generation: `gemini-nano-banana-2.1` ("Nano Banana 2.1"; latency / text-accuracy: see `docs/plans/fc-045.md` Execution)
 
 ---
 
@@ -81,7 +81,7 @@ ai_storybook_app/
 │   │   │   ├── auth.ts        # POST /api/auth/register, /api/auth/login
 │   │   │   └── stories.ts     # POST /api/stories/generate, GET /api/stories, GET /api/stories/:id
 │   │   ├── services/
-│   │   │   ├── gemini.ts      # AI generation (Gemini 3.1 Flash Image)
+│   │   │   ├── gemini.ts      # AI generation (gemini-3.8-flash text, gemini-nano-banana-2.1 images)
 │   │   │   └── firebase.ts    # Firebase Admin SDK init
 │   │   ├── middleware/
 │   │   │   └── auth.ts        # Firebase ID token verification
@@ -171,9 +171,11 @@ Defined in:
 ### Current Models (in `backend/src/services/gemini.ts`)
 
 ```typescript
-const TEXT_MODEL = 'gemini-3-flash-preview';            // Story text generation
-const IMAGE_MODEL = 'gemini-3.1-flash-image-preview';   // Image generation (~90% text accuracy, 4-6s/image)
+const TEXT_MODEL = 'gemini-3.8-flash';         // Story text + text/vision moderation classifiers
+const IMAGE_MODEL = 'gemini-nano-banana-2.1';   // Image generation (figures: docs/plans/fc-045.md Execution)
 ```
+
+GA model IDs only (FC-045) — `gemini-models.test.ts` fails if a `preview` / `exp` / `latest` ID is pinned.
 
 ### Image Generation Pattern
 
@@ -185,18 +187,21 @@ const response = await ai.models.generateContent({
   contents: prompt,
   config: {
     responseModalities: ['IMAGE'],
+    safetySettings: SAFETY_SETTINGS,
   },
 });
 
-// Extract image from response
-const parts = response.candidates[0]?.content?.parts || [];
-for (const part of parts) {
-  if (part.inlineData?.data) {
-    const buffer = Buffer.from(part.inlineData.data, 'base64');
-    // Upload to Cloud Storage...
-  }
+// Extract the FINAL image (backend/src/services/imageResponse.ts)
+const image = extractGeneratedImage(response);
+if (!image) {
+  // throw "No image data in ... response" (+ " — safety blocked: <reason>")
 }
+const buffer = Buffer.from(image.data, 'base64');
+// Upload to Cloud Storage with image.mimeType...
 ```
+
+`extractGeneratedImage` skips parts with `thought: true` (interim "thinking" draft images) and
+returns the **last** non-thought image part; it never falls back to a draft.
 
 ### Retry Logic
 
@@ -370,7 +375,7 @@ build you have not turned a page on.
 
 ### 1. 503 Service Unavailable (Image Generation)
 
-**Cause**: Gemini 3.1 Flash Image experiencing high demand
+**Cause**: image model (`gemini-nano-banana-2.1`) experiencing high demand
 
 **Solution**: Retry logic with exponential backoff implemented in `gemini.ts`
 
@@ -381,7 +386,8 @@ build you have not turned a page on.
 **History**:
 - Imagen 4 had ~70% text accuracy (nonsensical text in images) — abandoned
 - `gemini-3-pro-image-preview` ("Nano Banana Pro") gave ~94% accuracy at ~$0.13/image but 24-35s/image latency
-- Currently on `gemini-3.1-flash-image-preview` ("Nano Banana 2"): ~90% accuracy, 4-6s/image, ~$0.067/image — chose speed over the last 4% of accuracy. Revert IMAGE_MODEL constant if accuracy drops are unacceptable on real stories.
+- Then `gemini-3.1-flash-image-preview` ("Nano Banana 2"): ~90% accuracy, 4-6s/image, ~$0.067/image — chose speed over the last 4% of accuracy.
+- Moved to `gemini-nano-banana-2.1` in FC-045 because the preview ID was deprecated (past its listed shutdown date). Current figures: see `docs/plans/fc-045.md` Execution. Pre-approved fallback: `gemini-3.1-flash-image`.
 
 ### 3. Port Conflicts (Development)
 
@@ -397,8 +403,8 @@ kill -9 <PID>  # Or use existing server
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Story text generation | ✅ Complete | Gemini 2.0 Flash |
-| Image generation | ✅ Complete | Gemini 3.1 Flash Image |
+| Story text generation | ✅ Complete | `gemini-3.8-flash` |
+| Image generation | ✅ Complete | `gemini-nano-banana-2.1` |
 | Text in images | ✅ Complete | Dr. Seuss/Pout-Pout style |
 | 6 art styles | ✅ Complete | All working |
 | V2 color palette | ✅ Complete | Cream/yellow/coral theme |
@@ -437,13 +443,15 @@ gcloud run services logs read storybook-api --region us-central1 --limit 50
 
 ### 1. Image Generation Response Format
 
-Gemini 3.1 Flash Image returns images in this structure:
+`gemini-nano-banana-2.1` returns images as `inlineData` parts in `candidates[0].content.parts`:
 ```typescript
-response.candidates[0].content.parts[0].inlineData = {
+part.inlineData = {
   data: string;      // Base64 encoded image
   mimeType: string;  // 'image/png' or 'image/jpeg'
 }
+part.thought?: boolean; // true on interim "thinking" draft images — skipped
 ```
+The final image is the last part without `thought: true` (see `extractGeneratedImage`).
 
 ### 2. Text Embedding in Images
 
@@ -467,8 +475,8 @@ req.user = { uid: decodedToken.uid, email: decodedToken.email };
 ### 4. Story Generation Flow
 
 1. User submits form → `POST /api/stories/generate`
-2. Backend generates story text with Gemini 2.0 Flash
-3. For each page, generates illustration with Gemini 3.1 Flash Image
+2. Backend generates story text with `gemini-3.8-flash`
+3. For each page, generates illustration with `gemini-nano-banana-2.1`
 4. Images uploaded to Cloud Storage
 5. Story document saved to Firestore
 6. Response returned with full story data
