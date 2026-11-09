@@ -3,7 +3,7 @@
  * roughly $1-2 per run: one medium story with ~12 images).
  *
  * Runs the REAL production code from a fresh build against the live Gemini
- * API, for one 8-page story:
+ * API, for one medium (6-page) story:
  *
  *   generateStory -> moderateStoryText -> generateAllIllustrations
  *     (character refs, cast lineup, cover, anchor pages, parallel pages, with
@@ -157,6 +157,7 @@ const { moderatePageImage } = require(dist('services/visionModeration.js'));
 const { downloadRef } = require(dist('services/gcsDownload.js'));
 const { emptyJobState } = require(dist('services/jobState.js'));
 const { bakedTextPasses, MAX_CHARACTER_REFS } = require(dist('services/textVerify.js'));
+const { getPageCount } = require(dist('prompts/story.js'));
 const { ImageAnnotatorClient } = backendRequire('@google-cloud/vision');
 
 // --------------------------------------------------------------- helpers
@@ -247,8 +248,9 @@ async function phaseStory() {
   try {
     story = await gemini.generateStory(INPUT, STORY_ID);
     say(`story: "${story.title}" pages=${story.pages.length} characterSheets=${story.characterSheets.length} titlePage=${!!story.titlePage} ${Date.now() - t0}ms`);
-    check('story-text', story.pages.length === 8 && story.characterSheets.length >= 2 && !!story.titlePage,
-      `pages=${story.pages.length} (need 8), characters=${story.characterSheets.length} (need >=2 so the cast lineup runs), cover=${!!story.titlePage}`);
+    const expectedPages = getPageCount(INPUT.length); // medium = 6 (see prompts/story.ts), not the 5/8/12 older docs claim
+    check('story-text', story.pages.length === expectedPages && story.characterSheets.length >= 2 && !!story.titlePage,
+      `pages=${story.pages.length} (need ${expectedPages} for "${INPUT.length}"), characters=${story.characterSheets.length} (need >=2 so the cast lineup runs), cover=${!!story.titlePage}`);
   } catch (e) {
     check('story-text', false, `generateStory threw: ${errLine(e)}`);
   }
