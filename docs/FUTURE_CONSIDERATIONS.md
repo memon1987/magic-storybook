@@ -270,7 +270,7 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 
 ### FC-045: Gemini model refresh — move text + image generation off preview model IDs
 
-**Status:** Plan published
+**Status:** Executing (PR #54 open; merge gated on live verification)
 **Size estimate:** M
 **Owner:** Zeshan (executing via Claude, 2026-11-09)
 **Plan file:** [docs/plans/fc-045.md](plans/fc-045.md)
