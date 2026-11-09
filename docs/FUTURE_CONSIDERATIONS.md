@@ -297,6 +297,38 @@ This FC exists to capture those ideas before they get lost, NOT to compete with 
 - Is prepaid billing the right mode for a product with real users, or should the key move to postpaid / a budget alert?
 - Should the canary also generate one image (a few cents per run) or is the text call plus `models.list` enough?
 
+### FC-049: Production readiness — billing isolation, inference platform, cost per story, launch requirements (epic)
+
+**Status:** Researching (investigation published; plan not yet drafted)
+**Size estimate:** L (epic — split into one plan/PR per track below)
+**Owner:** Zeshan
+**Investigation:** [docs/investigations/production-readiness-and-cost-2026-11-09.md](investigations/production-readiness-and-cost-2026-11-09.md)
+**Filed:** 2026-11-09, after the Gemini prepaid-credit outage found during FC-045
+
+**Problem / opportunity:** the app is headed for broad App Store release with paid subscriptions. Today: Gemini spend comes from a prepaid credit pool shared with the options-wheel app on one billing account (it hit $0 with no alert); the backend uses an AI Studio API key with no SLA; a full story costs ≈ $0.75, ~85 % of it image output; images are public GCS URLs with the child's name baked in; and several App Store / COPPA requirements (account deletion, third-party-AI consent, report mechanism, privacy manifest) are unmet.
+
+**Two findings that reshape the ask:**
+- The storybook **already has its own GCP project** (`ai-storybook-app-2025`). What is shared is the **billing account**. Track A is a billing-account link, not a project migration (which would break Firebase Auth users).
+- **Google's terms prohibit Gemini in apps "directed towards or likely to be accessed by individuals under the age of 18" — on the Gemini API and on Vertex AI alike** (Cloud terms §20(d)). Moving to Vertex does not cure it. The AI provider is therefore an open decision gated on legal review (Track B0).
+
+**Tracks (each becomes its own plan + PR):**
+- **A. Billing isolation (S):** dedicated billing account for `ai-storybook-app-2025`; auto-reload with a monthly cap (if the Developer API stays); alerts-only budget + Gemini **spend-cap budget** + a low Pub/Sub "panic" budget; BigQuery billing export in the storybook project; labels, project lien, second Owner. Fix: local ADC quota project points at the options-wheel project.
+- **B0. Legal gate (blocking for broad release):** counsel's determination on Google's under-18 clause and on COPPA "directed to children"; written answer from Google; read OpenAI's under-18 API guidance and one other provider's terms.
+- **B. Inference platform (M):** if Google is viable → **Vertex AI** (same prices, postpaid, 99.5 % SLA, IAM instead of a key, Flex −50 %, spend caps) bundled with the SDK upgrade (FC-042); if not → OpenAI gpt-image-2 (1.6× price, minors framework) for images and a text-model move. Either way: a small provider interface around the image step, Developer API kept as fallback.
+- **C. Cost per story (M):** target **$0.35–0.40 interactive medium story** (from ≈ $0.75): NB 2.1 (FC-045), `thinkingLevel: minimal` (FC-042), cast-lineup-only references (bake-off), per-user character-sheet reuse, reference ordering for implicit caching; optional **batch tier ≈ $0.20**. Decision needed on revisiting baked-in text (L11: ≈ $0.10–0.25 but reverses FC-019/020). Validated against 123 production stories (10.8 images per full story).
+- **D. GCP production hardening (M–L):** per-user quotas and server-side entitlements with per-story `costUsd`; Firebase App Check on `/generate`; private bucket + signed URLs; `DELETE /api/account` (Firestore, GCS, Apple token revoke, Auth user); Cloud Tasks for generation; one SLO + uptime checks; secret rotation or removal via Vertex.
+- **E. App Store / privacy (M, mostly non-code):** parent-facing positioning (not Kids Category); third-party-AI consent screen (Apple 5.1.2(i)); report-this-page + contact info (1.2); StoreKit 2 + server notifications with backend entitlements; Small Business Program enrollment; privacy labels + `PrivacyInfo.xcprivacy`; Apple private-relay email registration; COPPA retention policy, security program, processor assurances.
+
+**Recommended order:** B0 and A immediately (A is an afternoon; B0 is calendar time) → C's cheap levers as FC-045/FC-042 land → B → D → E in parallel with store prep.
+
+**Open questions (owner):**
+- Target price per story / month; is a slower batch tier acceptable?
+- Appetite to revisit baked-in text (the only path well below $0.30/story)?
+- Who owns the Google terms question and by when?
+- Does anything in the options-wheel project still use Gemini keys on the shared pool?
+
+**Relates to:** FC-042 (SDK upgrade — now also the vehicle for Vertex + `thinkingLevel`), FC-045 (image model), FC-046 (outage detection), FC-047 (classifier eval), FC-048 (safety gaps), FC-006 (subscriptions), FC-016 (latency; character-sheet reuse was sketched there), FC-021 (GCP latency levers).
+
 ---
 
 ## Completed
